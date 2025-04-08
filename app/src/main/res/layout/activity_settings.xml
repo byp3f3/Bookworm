@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Настройки"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="24dp"/>
+
+    <!-- Личные данные -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingVertical="12dp">
+
+        <TextView
+            android:id="@+id/personalDataText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Личные данные"
+            android:textSize="18sp"
+            android:paddingVertical="8dp"/>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#E0E0E0"
+            android:layout_marginTop="4dp"/>
+    </LinearLayout>
+
+    <!-- Тема -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingVertical="12dp">
+
+        <TextView
+            android:id="@+id/themeText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Тема"
+            android:textSize="18sp"
+            android:paddingVertical="8dp"/>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#E0E0E0"
+            android:layout_marginTop="4dp"/>
+    </LinearLayout>
+
+    <!-- Настройки темы -->
+    <LinearLayout
+        android:id="@+id/themeSettings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone"
+        android:padding="16dp"
+        android:layout_marginTop="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:id="@+id/lightThemeText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Светлая"
+                android:textSize="16sp"
+                android:padding="12dp"
+                android:background="@drawable/theme_button_background"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/darkThemeText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Тёмная"
+                android:textSize="16sp"
+                android:padding="12dp"
+                android:background="@drawable/theme_button_background"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/sepiaThemeText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Сепия"
+                android:textSize="16sp"
+                android:padding="12dp"
+                android:background="@drawable/theme_button_background"/>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

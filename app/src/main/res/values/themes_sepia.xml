@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Bookworm.Sepia" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#8B9862</item>
+        <item name="colorPrimaryVariant">#8B9862</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#8B9862</item>
+        <item name="colorSecondaryVariant">#8B9862</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:colorBackground">#F4ECD8</item>
+        <item name="colorOnBackground">#4E3524</item>
+        <item name="android:statusBarColor">#F4ECD8</item>
+        <item name="android:navigationBarColor">#F4ECD8</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources> 

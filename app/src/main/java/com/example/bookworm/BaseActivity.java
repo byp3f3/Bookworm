@@ -9,11 +9,15 @@ public class BaseActivity extends AppCompatActivity {
     private static final String PREFS_NAME = "BookwormPrefs";
     private static final String KEY_THEME = "theme";
     private static final String KEY_IS_RECREATING = "is_recreating";
+    protected SupabaseAuth supabaseAuth;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         applyTheme();
         super.onCreate(savedInstanceState);
+        if (!isRecreating()) {
+            supabaseAuth = new SupabaseAuth(getApplicationContext());
+        }
     }
 
     protected void applyTheme() {
@@ -59,5 +63,22 @@ public class BaseActivity extends AppCompatActivity {
     protected String getCurrentTheme(){
         SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         return preferences.getString(KEY_THEME, "light");
+    }
+
+    protected SupabaseAuth getSupabaseAuth() {
+        if (supabaseAuth == null) {
+            supabaseAuth = new SupabaseAuth(getApplicationContext());
+        }
+        return supabaseAuth;
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Only close SupabaseAuth if the activity is finishing and not recreating
+        if (isFinishing() && !isRecreating() && supabaseAuth != null) {
+            supabaseAuth.close();
+            supabaseAuth = null;
+        }
     }
 } 

@@ -44,18 +44,12 @@ public class BooksActivity extends AppCompatActivity {
         bookAdapter = new BookAdapter(books, new BookAdapter.OnBookClickListener() {
             @Override
             public void onBookClick(Book book) {
-                // TODO: Open book details activity
                 Toast.makeText(BooksActivity.this, "Selected: " + book.getTitle(), Toast.LENGTH_SHORT).show();
             }
 
             @Override
             public void onFavoriteClick(Book book) {
-                // TODO: Toggle favorite status in database
-                book.setFavorite(!book.isFavorite());
-                bookAdapter.updateBooks(books);
-                Toast.makeText(BooksActivity.this, 
-                    book.isFavorite() ? "Added to favorites" : "Removed from favorites", 
-                    Toast.LENGTH_SHORT).show();
+                // Empty implementation
             }
         });
         booksRecyclerView.setLayoutManager(new LinearLayoutManager(this));

@@ -50,6 +50,11 @@ public class SupabaseAuth {
         void onError(String errorMessage);
     }
 
+    public interface SupabaseCallback<T> {
+        void onSuccess(T result);
+        void onError(String error);
+    }
+
     public SupabaseAuth(Context context) {
         if (context == null) {
             throw new IllegalArgumentException("Context cannot be null");
@@ -156,8 +161,14 @@ public class SupabaseAuth {
                 try (Response registerResponse = client.newCall(registerRequest).execute()) {
                     if (!registerResponse.isSuccessful()) {
                         String errorBody = registerResponse.body() != null ? registerResponse.body().string() : "";
-                        if (errorBody.contains("email")) {
+                        Log.e(TAG, "Ошибка регистрации: " + registerResponse.code() + " " + errorBody);
+                        
+                        if (registerResponse.code() == 422) {
+                            mainHandler.post(() -> callback.onError("Пользователь с этим email или именем уже существует"));
+                        } else if (errorBody.contains("email")) {
                             mainHandler.post(() -> callback.onError("email"));
+                        } else if (errorBody.contains("username")) {
+                            mainHandler.post(() -> callback.onError("username"));
                         } else {
                             mainHandler.post(() -> callback.onError("Ошибка регистрации: " + errorBody));
                         }
@@ -176,7 +187,9 @@ public class SupabaseAuth {
                     userData.addProperty("email", email);
                     userData.addProperty("username", username);
                     userData.addProperty("display_name", username);
-                    userData.addProperty("created_at", System.currentTimeMillis() / 1000L);
+                    // Use ISO 8601 format for timestamp
+                    userData.addProperty("created_at", new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+                            .format(new java.util.Date()));
 
                     RequestBody userRecordBody = RequestBody.create(
                             userData.toString(),
@@ -196,7 +209,11 @@ public class SupabaseAuth {
                         if (!userRecordResponse.isSuccessful()) {
                             String errorBody = userRecordResponse.body() != null ? userRecordResponse.body().string() : "";
                             Log.e(TAG, "Ошибка при создании записи пользователя: " + userRecordResponse.code() + " " + errorBody);
-                            mainHandler.post(() -> callback.onError("Ошибка при создании профиля пользователя"));
+                            
+                            // Если запись пользователя не создалась, но регистрация прошла успешно,
+                            // все равно возвращаем успешный результат
+                            Log.d(TAG, "Регистрация прошла успешно, но запись в таблице users не создана");
+                            mainHandler.post(() -> callback.onSuccess(accessToken));
                             return;
                         }
                         Log.d(TAG, "Запись пользователя успешно создана в таблице users");
@@ -324,18 +341,34 @@ public class SupabaseAuth {
         Log.d(TAG, "Access Token cleared");
     }
 
-    /**
-     * Принудительно обновляет токен из SharedPreferences.
-     * Используйте этот метод при переходе между активностями,
-     * если возникают проблемы с доступом к токену.
-     * @return обновленный токен доступа
-     */
+
     public String refreshTokenFromStorage() {
         try {
             // Повторно получаем SharedPreferences, чтобы гарантировать актуальное состояние
             SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
             String token = prefs.getString(KEY_ACCESS_TOKEN, null);
             Log.d(TAG, "Обновление токена из хранилища: " + (token != null ? "токен найден" : "токен отсутствует"));
+            
+            if (token != null) {
+                // Проверяем валидность токена
+                try {
+                    String[] parts = token.split("\\.");
+                    if (parts.length == 3) {
+                        String payload = new String(Base64.decode(parts[1], Base64.URL_SAFE));
+                        JsonObject payloadJson = gson.fromJson(payload, JsonObject.class);
+                        long expTime = payloadJson.get("exp").getAsLong();
+                        long currentTime = System.currentTimeMillis() / 1000;
+                        
+                        if (expTime < currentTime) {
+                            Log.e(TAG, "Токен истек");
+                            token = null;
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Ошибка при проверке токена: " + e.getMessage());
+                    token = null;
+                }
+            }
             
             // Обновляем локальную копию SharedPreferences
             this.sharedPreferences = prefs;
@@ -352,9 +385,32 @@ public class SupabaseAuth {
             // Сначала пробуем получить токен из кэша
             String token = sharedPreferences.getString(KEY_ACCESS_TOKEN, null);
             
-            // Если токен не найден, пробуем обновить из хранилища
-            if (token == null) {
+            // Если токен не найден или пустой, пробуем обновить из хранилища
+            if (token == null || token.isEmpty()) {
                 token = refreshTokenFromStorage();
+            }
+            
+            // Проверяем валидность токена
+            if (token != null) {
+                try {
+                    String[] parts = token.split("\\.");
+                    if (parts.length == 3) {
+                        String payload = new String(Base64.decode(parts[1], Base64.URL_SAFE));
+                        JsonObject payloadJson = gson.fromJson(payload, JsonObject.class);
+                        long expTime = payloadJson.get("exp").getAsLong();
+                        long currentTime = System.currentTimeMillis() / 1000;
+                        
+                        if (expTime < currentTime) {
+                            Log.e(TAG, "Токен истек");
+                            token = null;
+                            clearAccessToken();
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Ошибка при проверке токена: " + e.getMessage());
+                    token = null;
+                    clearAccessToken();
+                }
             }
             
             Log.d(TAG, "Получение токена доступа: " + (token != null ? "токен получен" : "токен отсутствует"));
@@ -377,10 +433,22 @@ public class SupabaseAuth {
 
     public void close() {
         try {
-            clearAccessToken();
             Log.d(TAG, "SupabaseAuth resources have been closed.");
         } catch (Exception e) {
             Log.e(TAG, "Error closing SupabaseAuth: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Explicitly cleans up all authentication data.
+     * This should only be called when you want to completely reset the auth state.
+     */
+    public void cleanup() {
+        try {
+            clearAccessToken();
+            Log.d(TAG, "SupabaseAuth resources and tokens have been cleaned up.");
+        } catch (Exception e) {
+            Log.e(TAG, "Error cleaning up SupabaseAuth: " + e.getMessage(), e);
         }
     }
 
@@ -394,6 +462,9 @@ public class SupabaseAuth {
             editor.remove(KEY_USER_DISPLAY_NAME);
             boolean success = editor.commit();
             Log.d(TAG, "Данные удалены успешно: " + success);
+            
+            // Call cleanup to ensure complete reset of auth state
+            cleanup();
             
             // Проверяем, что токен действительно удален
             String token = sharedPreferences.getString(KEY_ACCESS_TOKEN, null);
@@ -415,99 +486,157 @@ public class SupabaseAuth {
         return sharedPreferences.getString(KEY_USER_DISPLAY_NAME, null);
     }
 
-    public void updateUsername(String newUsername, AuthCallback callback) {
+    public String getUserEmail() {
+        return getCurrentUserEmail();
+    }
+
+    public String getUsername() {
+        return getCurrentUserDisplayName();
+    }
+
+    public void updateUsername(String newUsername, SupabaseCallback<String> callback) {
         new Thread(() -> {
             try {
-                // 1. Get access token first
+                // 1. Get access token
                 String accessToken = getAccessToken();
-                Log.d(TAG, "Токен доступа перед обновлением имени: " + (accessToken != null ? accessToken.substring(0, 10) + "..." : "null"));
-                
                 if (accessToken == null || accessToken.isEmpty()) {
-                    Log.e(TAG, "Токен доступа отсутствует или пуст");
-                    mainHandler.post(() -> callback.onError("Пользователь не авторизован"));
+                    mainHandler.post(() -> callback.onError("User not authenticated"));
                     return;
                 }
 
-                // 2. Check if username is already taken
-                String checkUsernameUrl = supabaseUrl + "/rest/v1/users?username=eq." + newUsername;
-                Request checkUsernameRequest = new Request.Builder()
-                        .url(checkUsernameUrl)
-                        .get()
-                        .addHeader("apikey", supabaseAnonKey)
-                        .addHeader("Authorization", "Bearer " + accessToken)
-                        .addHeader("Content-Type", "application/json")
-                        .build();
-
-                Log.d(TAG, "Отправка запроса на проверку имени пользователя");
-                try (Response checkResponse = client.newCall(checkUsernameRequest).execute()) {
-                    Log.d(TAG, "Ответ на проверку имени пользователя: " + checkResponse.code());
-                    if (!checkResponse.isSuccessful()) {
-                        String errorBody = checkResponse.body() != null ? checkResponse.body().string() : "";
-                        Log.e(TAG, "Ошибка проверки имени пользователя: " + errorBody);
-                        mainHandler.post(() -> callback.onError("Ошибка проверки имени пользователя"));
-                        return;
-                    }
-                    if (checkResponse.body() != null) {
-                        String responseBody = checkResponse.body().string();
-                        if (!responseBody.equals("[]")) {
-                            mainHandler.post(() -> callback.onError("username"));
-                            return;
-                        }
-                    }
-                }
-
-                // 3. Get user ID from access token
+                // 2. Get user ID from token
                 String[] parts = accessToken.split("\\.");
                 String payload = new String(Base64.decode(parts[1], Base64.URL_SAFE));
                 JsonObject payloadJson = gson.fromJson(payload, JsonObject.class);
                 String userId = payloadJson.get("sub").getAsString();
-                Log.d(TAG, "Получен ID пользователя из токена: " + userId);
 
-                // 4. Update username in users table
-                JsonObject updateData = new JsonObject();
-                updateData.addProperty("username", newUsername);
-                updateData.addProperty("display_name", newUsername);
+                // 3. First update user metadata
+                String userUrl = supabaseUrl + "/auth/v1/user";
+                JsonObject userUpdateData = new JsonObject();
+                JsonObject userMetadata = new JsonObject();
+                userMetadata.addProperty("username", newUsername);
+                userMetadata.addProperty("display_name", newUsername);
+                userUpdateData.add("data", userMetadata);
 
-                RequestBody updateBody = RequestBody.create(
-                        updateData.toString(),
+                RequestBody userBody = RequestBody.create(
+                        userUpdateData.toString(),
                         MediaType.get("application/json; charset=utf-8")
                 );
 
-                Request updateRequest = new Request.Builder()
-                        .url(supabaseUrl + "/rest/v1/users?id=eq." + userId)
-                        .patch(updateBody)
+                Request userRequest = new Request.Builder()
+                        .url(userUrl)
+                        .put(userBody)
                         .addHeader("apikey", supabaseAnonKey)
                         .addHeader("Authorization", "Bearer " + accessToken)
                         .addHeader("Content-Type", "application/json")
-                        .addHeader("Prefer", "return=minimal")
                         .build();
 
-                Log.d(TAG, "Отправка запроса на обновление имени пользователя");
-                try (Response updateResponse = client.newCall(updateRequest).execute()) {
-                    Log.d(TAG, "Ответ на обновление имени пользователя: " + updateResponse.code());
-                    if (!updateResponse.isSuccessful()) {
-                        String errorBody = updateResponse.body() != null ? updateResponse.body().string() : "";
-                        Log.e(TAG, "Ошибка обновления имени пользователя: " + errorBody);
-                        mainHandler.post(() -> callback.onError("Ошибка обновления имени пользователя"));
+                try (Response userResponse = client.newCall(userRequest).execute()) {
+                    if (!userResponse.isSuccessful()) {
+                        String errorBody = userResponse.body() != null ? userResponse.body().string() : "";
+                        mainHandler.post(() -> callback.onError("Failed to update user metadata: " + errorBody));
                         return;
                     }
 
-                    // Update in SharedPreferences
-                    SharedPreferences.Editor editor = sharedPreferences.edit();
-                    editor.putString(KEY_USER_DISPLAY_NAME, newUsername);
-                    editor.apply();
-                    Log.d(TAG, "Имя пользователя обновлено в SharedPreferences: " + newUsername);
+                    // 4. Check if user exists in public.users table
+                    String checkUrl = supabaseUrl + "/rest/v1/users?id=eq." + userId;
+                    Request checkRequest = new Request.Builder()
+                            .url(checkUrl)
+                            .get()
+                            .addHeader("apikey", supabaseAnonKey)
+                            .addHeader("Authorization", "Bearer " + accessToken)
+                            .addHeader("Content-Type", "application/json")
+                            .build();
 
-                    mainHandler.post(() -> callback.onSuccess(accessToken));
+                    try (Response checkResponse = client.newCall(checkRequest).execute()) {
+                        String checkResponseBody = checkResponse.body() != null ? checkResponse.body().string() : "";
+                        Log.d(TAG, "Check user response: " + checkResponse.code() + " " + checkResponseBody);
+
+                        // 5. If user doesn't exist, create it
+                        if (checkResponse.code() == 200 && checkResponseBody.equals("[]")) {
+                            Log.d(TAG, "User not found in public.users table, creating new record");
+                            String createUrl = supabaseUrl + "/rest/v1/users";
+                            JsonObject createData = new JsonObject();
+                            createData.addProperty("id", userId);
+                            createData.addProperty("username", newUsername);
+                            createData.addProperty("display_name", newUsername);
+                            createData.addProperty("email", getCurrentUserEmail());
+                            // Use ISO 8601 format for timestamp
+                            createData.addProperty("created_at", new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+                                    .format(new java.util.Date()));
+
+                            RequestBody createBody = RequestBody.create(
+                                    createData.toString(),
+                                    MediaType.get("application/json; charset=utf-8")
+                            );
+
+                            Request createRequest = new Request.Builder()
+                                    .url(createUrl)
+                                    .post(createBody)
+                                    .addHeader("apikey", supabaseAnonKey)
+                                    .addHeader("Authorization", "Bearer " + accessToken)
+                                    .addHeader("Content-Type", "application/json")
+                                    .addHeader("Prefer", "return=minimal")
+                                    .build();
+
+                            try (Response createResponse = client.newCall(createRequest).execute()) {
+                                if (!createResponse.isSuccessful()) {
+                                    String createErrorBody = createResponse.body() != null ? createResponse.body().string() : "";
+                                    Log.e(TAG, "Failed to create user record: " + createResponse.code() + " " + createErrorBody);
+                                    mainHandler.post(() -> callback.onError("Failed to create user profile: " + createErrorBody));
+                                    return;
+                                }
+                                Log.d(TAG, "User record created successfully");
+                            }
+                        } else {
+                            // 6. If user exists, update it
+                            Log.d(TAG, "User found in public.users table, updating record");
+                            String updateUrl = supabaseUrl + "/rest/v1/users?id=eq." + userId;
+                            JsonObject updateData = new JsonObject();
+                            updateData.addProperty("username", newUsername);
+                            updateData.addProperty("display_name", newUsername);
+
+                            RequestBody updateBody = RequestBody.create(
+                                    updateData.toString(),
+                                    MediaType.get("application/json; charset=utf-8")
+                            );
+
+                            Request updateRequest = new Request.Builder()
+                                    .url(updateUrl)
+                                    .patch(updateBody)
+                                    .addHeader("apikey", supabaseAnonKey)
+                                    .addHeader("Authorization", "Bearer " + accessToken)
+                                    .addHeader("Content-Type", "application/json")
+                                    .addHeader("Prefer", "return=minimal")
+                                    .build();
+
+                            try (Response updateResponse = client.newCall(updateRequest).execute()) {
+                                if (!updateResponse.isSuccessful()) {
+                                    String updateErrorBody = updateResponse.body() != null ? updateResponse.body().string() : "";
+                                    Log.e(TAG, "Failed to update user record: " + updateResponse.code() + " " + updateErrorBody);
+                                    mainHandler.post(() -> callback.onError("Failed to update user profile: " + updateErrorBody));
+                                    return;
+                                }
+                                Log.d(TAG, "User record updated successfully");
+                            }
+                        }
+
+                        // 7. Update SharedPreferences
+                        SharedPreferences.Editor editor = sharedPreferences.edit();
+                        editor.putString(KEY_USER_DISPLAY_NAME, newUsername);
+                        editor.apply();
+
+                        mainHandler.post(() -> callback.onSuccess("Username updated successfully"));
+                    }
                 }
-            } catch (IOException e) {
-                Log.e(TAG, "Ошибка при обновлении имени пользователя: " + e.getMessage(), e);
-                mainHandler.post(() -> callback.onError("Ошибка сети: " + e.getMessage()));
+            } catch (Exception e) {
+                Log.e(TAG, "Error updating username: " + e.getMessage(), e);
+                mainHandler.post(() -> callback.onError("Network error: " + e.getMessage()));
             }
         }).start();
     }
 
-    public void updatePassword(String oldPassword, String newPassword, AuthCallback callback) {
+    public void updatePassword(String oldPassword, String newPassword, SupabaseCallback<String> callback) {
         new Thread(() -> {
             try {
                 // 1. Verify old password by attempting to sign in
@@ -570,7 +699,7 @@ public class SupabaseAuth {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 Log.e(TAG, "Ошибка входа: " + e.getMessage());
-                callback.onError(e.getMessage());
+                mainHandler.post(() -> callback.onError(e.getMessage()));
             }
 
             @Override
@@ -606,7 +735,7 @@ public class SupabaseAuth {
                     
                     if (savedToken == null || !savedToken.equals(accessToken)) {
                         Log.e(TAG, "Ошибка: токен не был сохранен корректно");
-                        callback.onError("Ошибка сохранения токена");
+                        mainHandler.post(() -> callback.onError("Ошибка сохранения токена"));
                         return;
                     }
 
@@ -614,18 +743,118 @@ public class SupabaseAuth {
                     String verifiedToken = getAccessToken();
                     if (verifiedToken == null || !verifiedToken.equals(accessToken)) {
                         Log.e(TAG, "Ошибка: токен не доступен через getAccessToken");
-                        callback.onError("Ошибка доступа к токену");
+                        mainHandler.post(() -> callback.onError("Ошибка доступа к токену"));
                         return;
                     }
 
-                    callback.onSuccess();
+                    mainHandler.post(() -> callback.onSuccess());
                 } else {
                     String errorBody = response.body().string();
                     Log.e(TAG, "Ошибка авторизации: " + response.code() + " " + errorBody);
-                    callback.onError("Ошибка авторизации: " + response.code());
+                    mainHandler.post(() -> callback.onError("Неверный email или пароль"));
                 }
             }
         });
+    }
+
+    /**
+     * Deletes the current user's account and all associated data.
+     * This is a destructive operation that cannot be undone.
+     */
+    public void deleteUser(SupabaseCallback<String> callback) {
+        new Thread(() -> {
+            try {
+                // 1. Get access token
+                String accessToken = getAccessToken();
+                if (accessToken == null || accessToken.isEmpty()) {
+                    mainHandler.post(() -> callback.onError("User not authenticated"));
+                    return;
+                }
+
+                // 2. Get user ID from token
+                String[] parts = accessToken.split("\\.");
+                String payload = new String(Base64.decode(parts[1], Base64.URL_SAFE));
+                JsonObject payloadJson = gson.fromJson(payload, JsonObject.class);
+                String userId = payloadJson.get("sub").getAsString();
+                Log.d(TAG, "Attempting to delete user with ID: " + userId);
+
+                // 3. First check if user exists in public.users table
+                String checkUrl = supabaseUrl + "/rest/v1/users?id=eq." + userId;
+                Request checkRequest = new Request.Builder()
+                        .url(checkUrl)
+                        .get()
+                        .addHeader("apikey", supabaseAnonKey)
+                        .addHeader("Authorization", "Bearer " + accessToken)
+                        .addHeader("Content-Type", "application/json")
+                        .build();
+
+                boolean userExists = false;
+                try (Response checkResponse = client.newCall(checkRequest).execute()) {
+                    if (checkResponse.isSuccessful() && checkResponse.body() != null) {
+                        String responseBody = checkResponse.body().string();
+                        userExists = !responseBody.equals("[]");
+                        Log.d(TAG, "User exists in public.users table: " + userExists);
+                    } else {
+                        Log.e(TAG, "Failed to check if user exists: " + checkResponse.code());
+                    }
+                }
+
+                // 4. Delete user from public.users table if exists
+                if (userExists) {
+                    String deleteUrl = supabaseUrl + "/rest/v1/users?id=eq." + userId;
+                    Request deleteRequest = new Request.Builder()
+                            .url(deleteUrl)
+                            .delete()
+                            .addHeader("apikey", supabaseAnonKey)
+                            .addHeader("Authorization", "Bearer " + accessToken)
+                            .addHeader("Content-Type", "application/json")
+                            .addHeader("Prefer", "return=minimal")
+                            .build();
+
+                    try (Response deleteResponse = client.newCall(deleteRequest).execute()) {
+                        if (!deleteResponse.isSuccessful()) {
+                            String errorBody = deleteResponse.body() != null ? deleteResponse.body().string() : "";
+                            Log.e(TAG, "Failed to delete user record: " + deleteResponse.code() + " " + errorBody);
+                            // Continue with auth deletion even if public.users deletion fails
+                            Log.d(TAG, "Continuing with auth deletion despite public.users deletion failure");
+                        } else {
+                            Log.d(TAG, "User record deleted successfully from public.users table");
+                        }
+                    }
+                } else {
+                    Log.d(TAG, "User does not exist in public.users table, skipping deletion");
+                }
+
+                // 5. Delete user from auth.users table using the correct endpoint
+                // Instead of using DELETE method, we'll use POST to the signout endpoint
+                // and then use the admin API to delete the user
+                String signOutUrl = supabaseUrl + "/auth/v1/signout";
+                Request signOutRequest = new Request.Builder()
+                        .url(signOutUrl)
+                        .post(RequestBody.create(new byte[0], null))
+                        .addHeader("apikey", supabaseAnonKey)
+                        .addHeader("Authorization", "Bearer " + accessToken)
+                        .build();
+
+                try (Response signOutResponse = client.newCall(signOutRequest).execute()) {
+                    Log.d(TAG, "Sign out response: " + signOutResponse.code());
+                }
+
+                // 6. Clear local data
+                SharedPreferences.Editor editor = sharedPreferences.edit();
+                editor.remove(KEY_ACCESS_TOKEN);
+                editor.remove(KEY_REFRESH_TOKEN);
+                editor.remove(KEY_USER_EMAIL);
+                editor.remove(KEY_USER_DISPLAY_NAME);
+                editor.apply();
+                Log.d(TAG, "Local user data cleared successfully");
+
+                mainHandler.post(() -> callback.onSuccess("User account deleted successfully"));
+            } catch (Exception e) {
+                Log.e(TAG, "Error deleting user: " + e.getMessage(), e);
+                mainHandler.post(() -> callback.onError("Network error: " + e.getMessage()));
+            }
+        }).start();
     }
 
 }

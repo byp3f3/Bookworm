@@ -21,17 +21,14 @@ public class SettingsActivity extends BaseActivity {
     private TextView personalDataText;
     private TextView themeText;
     private SharedPreferences preferences;
-    private SupabaseAuth supabaseAuth;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_settings);
-
-        supabaseAuth = new SupabaseAuth(getApplicationContext());
         
         // Принудительно обновляем токен из хранилища
-        String accessToken = supabaseAuth.refreshTokenFromStorage();
+        String accessToken = getSupabaseAuth().refreshTokenFromStorage();
         Log.d(TAG, "Принудительное обновление токена: " + (accessToken != null ? "токен найден" : "токен отсутствует"));
 
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
@@ -52,7 +49,7 @@ public class SettingsActivity extends BaseActivity {
     private void setupClickListeners() {
         personalDataText.setOnClickListener(v -> {
             // Проверяем наличие токена перед переходом
-            String accessToken = supabaseAuth.getAccessToken();
+            String accessToken = getSupabaseAuth().getAccessToken();
             Log.d(TAG, "Проверка токена перед переходом: " + (accessToken != null ? "токен найден" : "токен отсутствует"));
             
             if (accessToken == null) {
@@ -91,17 +88,12 @@ public class SettingsActivity extends BaseActivity {
         recreate();
     }
 
-    private void updateThemeViews(String selectedTheme) {
-        lightThemeText.setSelected(selectedTheme.equals("light"));
-        darkThemeText.setSelected(selectedTheme.equals("dark"));
-        sepiaThemeText.setSelected(selectedTheme.equals("sepia"));
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (supabaseAuth != null) {
-            supabaseAuth.close();
-        }
+    private void updateThemeViews(String theme) {
+        lightThemeText.setCompoundDrawablesWithIntrinsicBounds(
+                theme.equals("light") ? R.drawable.ic_check : 0, 0, 0, 0);
+        darkThemeText.setCompoundDrawablesWithIntrinsicBounds(
+                theme.equals("dark") ? R.drawable.ic_check : 0, 0, 0, 0);
+        sepiaThemeText.setCompoundDrawablesWithIntrinsicBounds(
+                theme.equals("sepia") ? R.drawable.ic_check : 0, 0, 0, 0);
     }
 }

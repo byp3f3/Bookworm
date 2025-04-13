@@ -22,6 +22,19 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
+    packagingOptions {
+        exclude 'META-INF/DEPENDENCIES'
+        exclude 'META-INF/LICENSE'
+        exclude 'META-INF/LICENSE.txt'
+        exclude 'META-INF/license.txt'
+        exclude 'META-INF/NOTICE'
+        exclude 'META-INF/NOTICE.txt'
+        exclude 'META-INF/notice.txt'
+        exclude 'META-INF/ASL2.0'
+        exclude 'META-INF/*.md'
+        exclude 'META-INF/*.kotlin_module'
+    }
     
     sourceSets {
         main {
@@ -39,6 +52,8 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0' // Или самую новую версию
     implementation 'com.google.code.gson:gson:2.10.1' // Или самую новую версию
     implementation 'com.google.android.material:material:1.12.0'
+
+    implementation 'org.apache.pdfbox:pdfbox:2.0.27'
 
     implementation libs.appcompat
     implementation libs.material

@@ -8,29 +8,22 @@ import androidx.fragment.app.FragmentTransaction;
 
 public class MainActivity extends BaseActivity {
     private BottomNavigationView navView;
-    private SupabaseAuth supabaseAuth;
     private String currentTheme;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
 
-        // Проверяем авторизацию только если не пересоздаем активность
-        if (!isRecreating()) {
-            supabaseAuth = new SupabaseAuth(getApplicationContext());
-            
-            // Принудительно обновляем токен из хранилища
-            supabaseAuth.refreshTokenFromStorage();
-            
-            if (!supabaseAuth.isLoggedIn()) {
-                startActivity(new Intent(this, SignInActivity.class));
-                finish();
-                return;
-            }
+        // Use SupabaseAuth from BaseActivity
+        String token = getSupabaseAuth().getAccessToken();
+        if (token == null) {
+            Intent intent = new Intent(this, SignInActivity.class);
+            startActivity(intent);
+            finish();
+            return;
         }
 
-
-        setContentView(R.layout.activity_main);
         currentTheme = getCurrentTheme(); // Получаем текущую тему (например, из SharedPreferences)
         applyTheme();
 
@@ -77,8 +70,5 @@ public class MainActivity extends BaseActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (supabaseAuth != null) {
-            supabaseAuth.close();
-        }
     }
 }

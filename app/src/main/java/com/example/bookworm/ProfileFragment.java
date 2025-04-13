@@ -35,7 +35,6 @@ public class ProfileFragment extends BaseFragment {
         logoutButton = view.findViewById(R.id.logoutButton);
         settingsButton = view.findViewById(R.id.settingsButton);
 
-        // Load user profile
         loadUserProfile();
 
         settingsButton.setOnClickListener(v -> {

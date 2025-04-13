@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">Bookworm</string>
     <string name="sign_up">Нет аккаунта? Зарегистрируйтесь</string>
+    <string-array name="reading_status_array">
+        <item>В планах</item>
+        <item>Читаю</item>
+        <item>Прочитано</item>
+    </string-array>
 </resources>

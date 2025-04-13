@@ -41,10 +41,7 @@ public class BookAdapter extends RecyclerView.Adapter<BookAdapter.BookViewHolder
         
         // TODO: Load book cover using Glide or Picasso
         // holder.coverImageView.setImageUrl(book.getCoverUrl());
-        
-        holder.favoriteImageView.setImageResource(
-            book.isFavorite() ? R.drawable.ic_favorite_filled : R.drawable.ic_favorite_border
-        );
+
 
         holder.itemView.setOnClickListener(v -> listener.onBookClick(book));
         holder.favoriteImageView.setOnClickListener(v -> listener.onFavoriteClick(book));

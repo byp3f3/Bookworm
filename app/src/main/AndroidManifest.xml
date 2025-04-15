@@ -39,6 +39,8 @@
         <activity
             android:name=".BooksActivity"
             android:exported="false" />
+        <activity android:name=".EditBookActivity"
+            android:exported="false"/>
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />

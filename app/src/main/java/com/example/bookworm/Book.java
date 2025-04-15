@@ -7,10 +7,12 @@ public class Book {
     private String description;
     private String coverPath;
     private String filePath;
+    private String fileFormat;
     private String status;
     private int currentPage;
     private int totalPages;
     private int readingDays;
+    private String createdDate;
     private String startDate;
     private String endDate;
     private int rating;
@@ -18,7 +20,7 @@ public class Book {
 
     public Book(String id, String title, String author, String description, String coverPath, 
                 String filePath, String status, int currentPage, int totalPages, int readingDays, 
-                String startDate, String endDate, int rating, String review) {
+                String startDate, String endDate, int rating, String review, String fileFormat) {
         this.id = id;
         this.title = title;
         this.author = author;
@@ -33,6 +35,11 @@ public class Book {
         this.endDate = endDate;
         this.rating = rating;
         this.review = review;
+        this.fileFormat = fileFormat;
+    }
+
+    public Book() {
+
     }
 
     public String getId() { return id; }
@@ -50,6 +57,15 @@ public class Book {
     public int getRating() { return rating; }
     public String getReview() { return review; }
 
+    public String getFileFormat() {
+        return fileFormat;
+    }
+
+    public String getCreatedDate() {
+        return createdDate;
+    }
+
+
     public void setId(String id) { this.id = id; }
     public void setTitle(String title) { this.title = title; }
     public void setAuthor(String author) { this.author = author; }
@@ -64,6 +80,14 @@ public class Book {
     public void setEndDate(String endDate) { this.endDate = endDate; }
     public void setRating(int rating) { this.rating = rating; }
     public void setReview(String review) { this.review = review; }
+
+    public void setFileFormat(String fileFormat) {
+        this.fileFormat = fileFormat;
+    }
+
+    public void setCreatedDate(String createdDate) {
+        this.createdDate = createdDate;
+    }
 
     public int getReadingProgress() {
         if (totalPages <= 0) return 0;

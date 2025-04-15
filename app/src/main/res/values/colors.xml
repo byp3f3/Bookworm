@@ -28,4 +28,10 @@
     <color name="sepia_secondary_dark">#856545</color>
     <color name="sepia_surface">#FDF6E9</color>
     <color name="sepia_error">#B00020</color>
+
+    <color name="sort_button_text">#212121</color>
+    <color name="green">#4CAF50</color>
+    <color name="gold">#FFD700</color>
+    <color name="card_background">#F5F5F5</color>
+    <color name="text_primary">#212121</color>
 </resources>

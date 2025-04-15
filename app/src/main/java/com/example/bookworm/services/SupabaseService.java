@@ -14,16 +14,20 @@ import android.webkit.MimeTypeMap;
 import com.example.bookworm.Book;
 import com.example.bookworm.SupabaseAuth;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -31,8 +35,8 @@ import java.util.concurrent.Executors;
 public class SupabaseService {
 
     private static final String TAG = "SupabaseService";
-    private static final String SUPABASE_URL = "";
-    private static final String SUPABASE_KEY = "";
+    private static final String SUPABASE_URL = "https://mfszyfmtujztqrjweixz.supabase.co";
+    private static final String SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mc3p5Zm10dWp6dHFyandlaXh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE1OTkzNDAsImV4cCI6MjA1NzE3NTM0MH0.3URDTNl5T0R_TyWn6L0NlEFuLYoiH2qcQdYVNovFtVw";
 
     private final Context context;
     private final Handler mainHandler;
@@ -58,15 +62,6 @@ public class SupabaseService {
 
     public void shutdown() {
         executorService.shutdown();
-    }
-
-    private String mapStatusToDb(String displayStatus) {
-        switch (displayStatus) {
-            case "В планах": return "PLANNED";
-            case "Читаю": return "READING";
-            case "Прочитано": return "FINISHED";
-            default: return "PLANNED";
-        }
     }
 
     private String getUserIdFromToken(String accessToken) {
@@ -311,7 +306,7 @@ public class SupabaseService {
                 bookData.put("author", book.getAuthor());
                 bookData.put("description", book.getDescription());
                 bookData.put("page_count", book.getTotalPages());
-                bookData.put("status", mapStatusToDb(book.getStatus()));
+                bookData.put("status", book.getStatus());
                 bookData.put("current_page", book.getCurrentPage());
                 bookData.put("file_url", fileUrl);
                 bookData.put("cover_image_url", coverUrl);
@@ -444,4 +439,209 @@ public class SupabaseService {
     private void notifyError(FileUploadCallback callback, String error) {
         mainHandler.post(() -> callback.onError(error));
     }
+
+
+    public void getCurrentlyReadingBooks(BooksLoadCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            BufferedReader reader = null;
+
+            try {
+                // 1. Authentication check
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                // 2. Get user ID
+                String userId = getUserIdFromToken(accessToken);
+                if (userId == null) {
+                    notifyError(callback, "Could not get user ID");
+                    return;
+                }
+
+                // 3. Configure connection - use UI status value directly
+                // Use Russian status in query string: "status=eq.Читаю"
+                String urlString = SUPABASE_URL + "/rest/v1/books?select=*&user_id=eq." + userId + "&status=eq.Читаю";
+                Log.d(TAG, "Fetching currently reading books with URL: " + urlString);
+                
+                URL url = new URL(urlString);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(15000);
+
+                // 4. Handle response
+                int responseCode = connection.getResponseCode();
+                Log.d(TAG, "getCurrentlyReadingBooks response code: " + responseCode);
+                
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+                    
+                    String responseData = response.toString();
+                    Log.d(TAG, "getCurrentlyReadingBooks response: " + responseData);
+
+                    JSONArray booksArray = new JSONArray(responseData);
+                    List<Book> books = new ArrayList<>();
+
+                    for (int i = 0; i < booksArray.length(); i++) {
+                        JSONObject bookJson = booksArray.getJSONObject(i);
+                        Book book = new Book();
+                        book.setId(bookJson.getString("id"));
+                        book.setTitle(bookJson.getString("title"));
+                        book.setAuthor(bookJson.getString("author"));
+                        book.setDescription(bookJson.optString("description", ""));
+                        book.setTotalPages(bookJson.optInt("page_count", 0));
+                        book.setCurrentPage(bookJson.optInt("current_page", 0));
+                        
+                        // Use status directly from database - should already be "Читаю"
+                        String status = bookJson.optString("status", "Читаю");
+                        book.setStatus(status);
+                        
+                        book.setCoverPath(bookJson.optString("cover_image_url", null));
+                        book.setStartDate(bookJson.optString("start_date", null));
+                        book.setEndDate(bookJson.optString("finish_date", null));
+                        book.setRating(bookJson.optInt("rating", 0));
+
+                        books.add(book);
+                    }
+
+                    notifySuccess(callback, books);
+                } else {
+                    String errorMsg = readErrorResponse(connection);
+                    Log.e(TAG, "Failed to load reading books: " + responseCode + " - " + errorMsg);
+                    notifyError(callback, "Failed to load books: " + responseCode + " - " + errorMsg);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error loading reading books", e);
+                notifyError(callback, "Error: " + e.getMessage());
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException e) {
+                        Log.w(TAG, "Error closing reader", e);
+                    }
+                }
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    public void getAllUserBooks(BooksLoadCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            BufferedReader reader = null;
+
+            try {
+                // 1. Authentication check
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                // 2. Get user ID
+                String userId = getUserIdFromToken(accessToken);
+                if (userId == null) {
+                    notifyError(callback, "Could not get user ID");
+                    return;
+                }
+
+                // 3. Configure connection - получаем ВСЕ книги пользователя
+                String urlString = SUPABASE_URL + "/rest/v1/books?select=*&user_id=eq." + userId;
+                URL url = new URL(urlString);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(15000);
+
+                // 4. Handle response
+                int responseCode = connection.getResponseCode();
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+
+                    JSONArray booksArray = new JSONArray(response.toString());
+                    List<Book> books = new ArrayList<>();
+
+                    for (int i = 0; i < booksArray.length(); i++) {
+                        JSONObject bookJson = booksArray.getJSONObject(i);
+                        Book book = new Book();
+                        book.setId(bookJson.getString("id"));
+                        book.setTitle(bookJson.getString("title"));
+                        book.setAuthor(bookJson.getString("author"));
+                        book.setDescription(bookJson.optString("description", ""));
+                        book.setTotalPages(bookJson.optInt("page_count", 0));
+                        book.setCurrentPage(bookJson.optInt("current_page", 0));
+
+                        // Use status directly from database, fallback to default if null
+                        String status = bookJson.optString("status", "В планах");
+                        if (status == null) {
+                            status = "В планах"; // Default value
+                        }
+                        book.setStatus(status);
+
+                        book.setCoverPath(bookJson.optString("cover_image_url", null));
+                        book.setStartDate(bookJson.optString("start_date", null));
+                        book.setEndDate(bookJson.optString("finish_date", null));
+                        book.setRating(bookJson.optInt("rating", 0));
+
+                        books.add(book);
+                    }
+
+                    notifySuccess(callback, books);
+                } else {
+                    String errorMsg = readErrorResponse(connection);
+                    notifyError(callback, "Failed to load books: " + responseCode + " - " + errorMsg);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error loading books", e);
+                notifyError(callback, "Error: " + e.getMessage());
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException e) {
+                        Log.w(TAG, "Error closing reader", e);
+                    }
+                }
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    private void notifySuccess(BooksLoadCallback callback, List<Book> books) {
+        mainHandler.post(() -> callback.onSuccess(books));
+    }
+
+    private void notifyError(BooksLoadCallback callback, String error) {
+        mainHandler.post(() -> callback.onError(error));
+    }
+
+    public interface BooksLoadCallback {
+        void onSuccess(List<Book> books);
+        void onError(String error);
+    }
 }
+

@@ -272,7 +272,9 @@ public class AddBookActivity extends AppCompatActivity {
             startDate,
             endDate,
             rating,
-            review
+            review,
+            getFileFormatFromUrl(selectedFilePath)
+
         );
 
         // Используем уже созданный экземпляр supabaseService
@@ -306,5 +308,34 @@ public class AddBookActivity extends AppCompatActivity {
                 }
             }
         });
+    }
+
+
+    private String getFileFormatFromUrl(String fileUrl) {
+        if (fileUrl == null) return "UNKNOWN";
+
+        int lastDot = fileUrl.lastIndexOf('.');
+        if (lastDot > 0) {
+            String ext = fileUrl.substring(lastDot + 1).toLowerCase();
+            switch (ext) {
+                case "pdf": return "PDF";
+                case "epub": return "EPUB";
+                case "fb2": return "FB2";
+                case "txt": return "TXT";
+                // Обрабатываем случаи, когда расширение не входит в список допустимых
+                default: {
+                    Log.w(TAG, "Non-standard file extension detected: " + ext);
+                    // Для FB2.ZIP файлов
+                    if (ext.equals("zip") && fileUrl.toLowerCase().contains("fb2")) {
+                        return "FB2";
+                    }
+                    // Возвращаем один из допустимых форматов, предпочтительно EPUB как наиболее распространенный
+                    return "EPUB";
+                }
+            }
+        }
+        // Возвращаем допустимое значение по умолчанию вместо UNKNOWN
+        Log.w(TAG, "Could not determine file format from URL: " + fileUrl);
+        return "EPUB";
     }
 }

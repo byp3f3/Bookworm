@@ -49,6 +49,14 @@ android {
 }
 
 dependencies {
+
+    implementation 'com.github.bumptech.glide:glide:4.12.0'
+    annotationProcessor 'com.github.bumptech.glide:compiler:4.12.0'
+
+    implementation 'com.squareup.picasso:picasso:2.8'
+
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+
     implementation 'com.squareup.okhttp3:okhttp:4.12.0' // Или самую новую версию
     implementation 'com.google.code.gson:gson:2.10.1' // Или самую новую версию
     implementation 'com.google.android.material:material:1.12.0'
@@ -62,4 +70,9 @@ dependencies {
     testImplementation libs.junit
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
+
+    // Supabase
+    implementation 'io.github.jan-tennert.supabase:postgrest-kt:1.4.7'
+    implementation 'io.github.jan-tennert.supabase:gotrue-kt:1.4.7'
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0'
 }

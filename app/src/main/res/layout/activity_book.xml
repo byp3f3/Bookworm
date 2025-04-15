@@ -19,7 +19,7 @@
             android:layout_height="450dp"
             android:layout_gravity="center_horizontal"
             android:scaleType="centerCrop"
-            android:src="@drawable/book_placeholder"
+            android:src="@drawable/ic_book_placeholder"
             android:layout_marginBottom="16dp"/>
 
         <!-- Basic Metadata -->
@@ -36,27 +36,21 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textSize="18sp"
-            android:layout_marginBottom="8dp"/>
+            android:layout_marginBottom="16dp"/>
 
         <!-- Reading Status -->
-        <LinearLayout
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Статус чтения:"
+            android:textSize="16sp"
+            android:layout_marginBottom="8dp"/>
+
+        <Spinner
+            android:id="@+id/readingStatusSpinner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="16dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Статус:"
-                android:textSize="16sp"/>
-
-            <Spinner
-                android:id="@+id/readingStatusSpinner"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"/>
-        </LinearLayout>
+            android:layout_marginBottom="16dp"/>
 
         <!-- Currently Reading Section -->
         <LinearLayout
@@ -64,28 +58,53 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:visibility="gone"
-            android:layout_marginBottom="16dp">
+            android:visibility="gone">
 
             <TextView
                 android:id="@+id/readingProgress"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textSize="16sp"/>
+                android:textSize="16sp"
+                android:layout_marginBottom="8dp"/>
 
-            <ProgressBar
+            <SeekBar
                 android:id="@+id/progressBar"
-                style="?android:attr/progressBarStyleHorizontal"
                 android:layout_width="match_parent"
-                android:layout_height="8dp"
-                android:layout_marginTop="8dp"/>
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"/>
 
             <TextView
                 android:id="@+id/readingDays"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textSize="14sp"
-                android:layout_marginTop="8dp"/>
+                android:textSize="16sp"
+                android:layout_marginBottom="8dp"/>
+
+            <!-- Progress Update Section -->
+            <LinearLayout
+                android:id="@+id/progressUpdateSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp"
+                android:visibility="gone">
+
+                <EditText
+                    android:id="@+id/progressEditText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="Номер страницы"
+                    android:inputType="number"
+                    android:maxLength="5"/>
+
+                <Button
+                    android:id="@+id/updateProgressButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Обновить"
+                    android:layout_marginStart="8dp"/>
+            </LinearLayout>
         </LinearLayout>
 
         <!-- Finished Reading Section -->
@@ -94,98 +113,70 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:visibility="gone"
-            android:layout_marginBottom="16dp">
+            android:visibility="gone">
 
             <TextView
                 android:id="@+id/readingDates"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textSize="16sp"/>
+                android:textSize="16sp"
+                android:layout_marginBottom="8dp"/>
 
             <TextView
                 android:id="@+id/totalReadingTime"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="16sp"
-                android:layout_marginTop="8dp"/>
+                android:layout_marginBottom="16dp"/>
 
-            <TextView
-                android:id="@+id/pagesPerDay"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textSize="16sp"
-                android:layout_marginTop="8dp"/>
-        </LinearLayout>
-
-        <!-- Rating -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="16dp">
-
+            <!-- User Data Section -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Оценка:"
-                android:textSize="16sp"/>
+                android:text="Оценка"
+                android:textSize="16sp"
+                android:layout_marginBottom="8dp"/>
 
             <RatingBar
                 android:id="@+id/ratingBar"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:numStars="5"
-                android:stepSize="1"/>
+                android:layout_marginBottom="16dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Рецензия"
+                android:textSize="16sp"
+                android:layout_marginBottom="8dp"/>
+
+            <EditText
+                android:id="@+id/bookReview"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minLines="3"
+                android:gravity="top"
+                android:inputType="textMultiLine"
+                android:background="@android:drawable/editbox_background"
+                android:padding="8dp"
+                android:layout_marginBottom="8dp"/>
+
+            <Button
+                android:id="@+id/saveReviewButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Сохранить рецензию"
+                android:layout_marginBottom="16dp"/>
+
+            <Button
+                android:id="@+id/editReviewButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Редактировать рецензию"
+                android:layout_marginBottom="16dp"/>
         </LinearLayout>
 
-        <!-- Review -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Рецензия:"
-            android:textSize="16sp"
-            android:layout_marginBottom="8dp"/>
-
-        <TextView
-            android:id="@+id/bookReview"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="14sp"
-            android:layout_marginBottom="16dp"/>
-
-        <Button
-            android:id="@+id/editReviewButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Редактировать рецензию"
-            android:layout_marginBottom="24dp"/>
-
-        <!-- Quotes Section -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Цитаты"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp"/>
-
-        <LinearLayout
-            android:id="@+id/quotesContainer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:layout_marginBottom="24dp"/>
-
         <!-- Action Buttons -->
-        <Button
-            android:id="@+id/startReadingButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Начать чтение"
-            android:layout_marginBottom="8dp"/>
-
         <Button
             android:id="@+id/editBookButton"
             android:layout_width="match_parent"
@@ -198,6 +189,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Удалить из библиотеки"
-            android:backgroundTint="@android:color/holo_red_light"/>
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
     </LinearLayout>
 </ScrollView>

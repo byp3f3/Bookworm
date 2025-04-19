@@ -491,7 +491,40 @@ public class SupabaseAuth {
     }
 
     public String getUsername() {
-        return getCurrentUserDisplayName();
+        return sharedPreferences.getString(KEY_USER_DISPLAY_NAME, null);
+    }
+
+    /**
+     * Проверяет, существует ли пользователь с указанным именем
+     * @param username Имя пользователя для проверки
+     * @param callback Колбэк с результатом (true если существует, false если нет)
+     */
+    public void checkUsernameExists(String username, SupabaseCallback<Boolean> callback) {
+        new Thread(() -> {
+            try {
+                // Проверяем, существует ли username
+                String checkUsernameUrl = supabaseUrl + "/rest/v1/users?username=eq." + username;
+                Request checkUsernameRequest = new Request.Builder()
+                        .url(checkUsernameUrl)
+                        .get()
+                        .addHeader("apikey", supabaseAnonKey)
+                        .addHeader("Content-Type", "application/json")
+                        .build();
+
+                try (Response checkResponse = client.newCall(checkUsernameRequest).execute()) {
+                    if (checkResponse.isSuccessful() && checkResponse.body() != null) {
+                        String responseBody = checkResponse.body().string();
+                        boolean exists = !responseBody.equals("[]");
+                        mainHandler.post(() -> callback.onSuccess(exists));
+                    } else {
+                        mainHandler.post(() -> callback.onError("Ошибка при проверке имени пользователя"));
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Ошибка проверки имени пользователя: " + e.getMessage(), e);
+                mainHandler.post(() -> callback.onError("Ошибка сети: " + e.getMessage()));
+            }
+        }).start();
     }
 
     public void updateUsername(String newUsername, SupabaseCallback<String> callback) {
@@ -614,7 +647,13 @@ public class SupabaseAuth {
                                 if (!updateResponse.isSuccessful()) {
                                     String updateErrorBody = updateResponse.body() != null ? updateResponse.body().string() : "";
                                     Log.e(TAG, "Failed to update user record: " + updateResponse.code() + " " + updateErrorBody);
-                                    mainHandler.post(() -> callback.onError("Failed to update user profile: " + updateErrorBody));
+                                    
+                                    // Проверяем на нарушение уникальности имени пользователя
+                                    if (updateErrorBody.contains("23505") && updateErrorBody.contains("users_username_key")) {
+                                        mainHandler.post(() -> callback.onError("username_exists"));
+                                    } else {
+                                        mainHandler.post(() -> callback.onError("Failed to update user profile: " + updateErrorBody));
+                                    }
                                     return;
                                 }
                                 Log.d(TAG, "User record updated successfully");

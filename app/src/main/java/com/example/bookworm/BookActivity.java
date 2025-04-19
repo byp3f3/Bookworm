@@ -28,8 +28,17 @@ import java.util.Date;
 import java.util.Locale;
 import java.text.ParseException;
 import android.widget.SeekBar;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.URLEncoder;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.FileOutputStream;
+import org.json.JSONArray;
 
 public class BookActivity extends BaseActivity {
+    private static final String TAG = "BookActivity";
     private String bookId;
     private String readingStatus;
     private int currentPage;
@@ -133,13 +142,13 @@ public class BookActivity extends BaseActivity {
 
         // Setup click listeners
         bookCover.setOnClickListener(v -> openBookContent(bookTitle));
-        
+
         // Setup review save button
         saveReviewButton.setOnClickListener(v -> {
             String newReview = reviewView.getText().toString().trim();
             saveReview(newReview);
         });
-        
+
         editBookButton.setOnClickListener(v -> {
             Intent intent = new Intent(this, EditBookActivity.class);
             intent.putExtra("id", bookId);
@@ -265,7 +274,7 @@ public class BookActivity extends BaseActivity {
                     }
                 }
             } catch (Exception e) {
-                Log.e("BookActivity", "Failed to load review from Supabase: " + e.getMessage());
+                Log.e(TAG, "Failed to load review from Supabase: " + e.getMessage());
             }
         }).start();
     }
@@ -295,7 +304,7 @@ public class BookActivity extends BaseActivity {
 
     private void syncReadingProgress() {
         if (bookId == null || bookId.isEmpty()) {
-            Log.e("BookActivity", "Invalid book ID: null or empty");
+            Log.e(TAG, "Invalid book ID: null or empty");
             Toast.makeText(this, "Ошибка: неверный идентификатор книги", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -344,7 +353,7 @@ public class BookActivity extends BaseActivity {
                     }
                 }
             } catch (Exception e) {
-                Log.e("BookActivity", "Failed to sync progress with Supabase: " + e.getMessage());
+                Log.e(TAG, "Failed to sync progress with Supabase: " + e.getMessage());
                 runOnUiThread(() -> {
                     Toast.makeText(BookActivity.this, 
                         "Ошибка синхронизации с облаком: " + e.getMessage(), 
@@ -367,14 +376,120 @@ public class BookActivity extends BaseActivity {
     }
 
     private void openBookContent(String bookTitle) {
-        // Check if book content exists
-        boolean hasContent = false; // Replace with actual check
+        // Check if we have a local file path
+        String localFilePath = getIntent().getStringExtra("filePath");
 
-        if (hasContent) {
+        if (localFilePath != null && !localFilePath.isEmpty()) {
+            // We have a local file, open it directly
+            Log.d(TAG, "Opening book from local file: " + localFilePath);
             Intent intent = new Intent(this, BookReaderActivity.class);
             intent.putExtra("title", bookTitle);
+            intent.putExtra("id", bookId);
+            intent.putExtra("currentPage", currentPage);
+            intent.putExtra("fileUri", Uri.parse(localFilePath));
             startActivity(intent);
-        } else {
+            return;
+        }
+        
+        // No local file, need to download from Supabase
+        Log.d(TAG, "No local file path, attempting to download from Supabase");
+        progressBar.setVisibility(ProgressBar.VISIBLE);
+        
+        // Use the book ID to fetch the file from Supabase
+        if (bookId == null || bookId.isEmpty()) {
+            Log.e(TAG, "Cannot download file: Book ID is null or empty");
+            progressBar.setVisibility(ProgressBar.GONE);
+            showNoContentDialog(bookTitle);
+            return;
+        }
+        
+        // Show download progress
+        Toast.makeText(this, "Загрузка книги...", Toast.LENGTH_SHORT).show();
+        
+        // Run the download task in background
+        new Thread(() -> {
+            try {
+                // Fetch the file URL from Supabase using the book ID
+                URL url = new URL("https://mfszyfmtujztqrjweixz.supabase.co/rest/v1/books?select=file_url&id=eq." + bookId);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("apikey", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mc3p5Zm10dWp6dHFyandlaXh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE1OTkzNDAsImV4cCI6MjA1NzE3NTM0MH0.3URDTNl5T0R_TyWn6L0NlEFuLYoiH2qcQdYVNovFtVw");
+                connection.setRequestProperty("Content-Type", "application/json");
+                
+                if (connection.getResponseCode() == 200) {
+                    StringBuilder response = new StringBuilder();
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            response.append(line);
+                        }
+                    }
+                    
+                    // Parse the JSON response to get the file URL
+                    JSONArray jsonArray = new JSONArray(response.toString());
+                    if (jsonArray.length() > 0) {
+                        JSONObject book = jsonArray.getJSONObject(0);
+                        String fileUrl = book.getString("file_url");
+                        
+                        if (fileUrl != null && !fileUrl.isEmpty()) {
+                            // Download the file from the URL
+                            URL fileDownloadUrl = new URL(fileUrl);
+                            connection = (HttpURLConnection) fileDownloadUrl.openConnection();
+                            
+                            // Create a temporary file to store the download
+                            File tempDir = new File(getFilesDir(), "books");
+                            if (!tempDir.exists()) {
+                                tempDir.mkdirs();
+                            }
+                            
+                            File tempFile = new File(tempDir, bookId + ".book");
+                            
+                            if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                                try (InputStream inputStream = connection.getInputStream();
+                                     FileOutputStream outputStream = new FileOutputStream(tempFile)) {
+                                    byte[] buffer = new byte[4096];
+                                    int bytesRead;
+                                    while ((bytesRead = inputStream.read(buffer)) != -1) {
+                                        outputStream.write(buffer, 0, bytesRead);
+                                    }
+                                }
+                                
+                                // Update the file path in the intent
+                                getIntent().putExtra("filePath", tempFile.getAbsolutePath());
+                                
+                                // Open the book reader with the downloaded file
+                                runOnUiThread(() -> {
+                                    progressBar.setVisibility(ProgressBar.GONE);
+                                    Intent intent = new Intent(this, BookReaderActivity.class);
+                                    intent.putExtra("title", bookTitle);
+                                    intent.putExtra("id", bookId);
+                                    intent.putExtra("currentPage", currentPage);
+                                    intent.putExtra("fileUri", Uri.fromFile(tempFile));
+                                    startActivity(intent);
+                                });
+                                return;
+                            }
+                        }
+                    }
+                }
+                
+                // If we get here, something went wrong
+                runOnUiThread(() -> {
+                    progressBar.setVisibility(ProgressBar.GONE);
+                    showNoContentDialog(bookTitle);
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "Error downloading book", e);
+                runOnUiThread(() -> {
+                    progressBar.setVisibility(ProgressBar.GONE);
+                    Toast.makeText(BookActivity.this, "Ошибка загрузки: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    showNoContentDialog(bookTitle);
+                });
+            }
+        }).start();
+    }
+
+    private void showNoContentDialog(String bookTitle) {
             new AlertDialog.Builder(this)
                     .setTitle("Содержание отсутствует")
                     .setMessage("Содержание книги отсутствует. Хотите добавить файл?")
@@ -384,10 +499,8 @@ public class BookActivity extends BaseActivity {
                         intent.addCategory(Intent.CATEGORY_OPENABLE);
                         intent.setType("*/*");
                         String[] mimeTypes = {
-                                "application/pdf",
                                 "application/x-fictionbook+xml",
-                                "application/epub+zip",
-                                "text/plain"
+                            "application/epub+zip"
                         };
                         intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
                         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -396,7 +509,6 @@ public class BookActivity extends BaseActivity {
                     })
                     .setNegativeButton("Отмена", null)
                     .show();
-        }
     }
 
     @Override
@@ -647,7 +759,7 @@ public class BookActivity extends BaseActivity {
     
     private void syncRatingAndReview(int rating, String review) {
         if (bookId == null || bookId.isEmpty()) {
-            Log.e("BookActivity", "Invalid book ID: null or empty");
+            Log.e(TAG, "Invalid book ID: null or empty");
             return;
         }
 
@@ -686,7 +798,7 @@ public class BookActivity extends BaseActivity {
                     throw new Exception("HTTP error code: " + responseCode);
                 }
             } catch (Exception e) {
-                Log.e("BookActivity", "Failed to sync rating/review with Supabase: " + e.getMessage());
+                Log.e(TAG, "Failed to sync rating/review with Supabase: " + e.getMessage());
             }
         }).start();
     }
@@ -696,11 +808,78 @@ public class BookActivity extends BaseActivity {
                 .setTitle("Удаление книги")
                 .setMessage("Вы уверены, что хотите удалить эту книгу из библиотеки?")
                 .setPositiveButton("Удалить", (dialog, which) -> {
-                    // Delete book from database
-                    finish();
+                    // Delete from Supabase
+                    deleteBookFromSupabase();
                 })
                 .setNegativeButton("Отмена", null)
                 .show();
+    }
+
+    private void deleteBookFromSupabase() {
+        if (bookId == null || bookId.isEmpty()) {
+            Log.e(TAG, "Cannot delete book: Invalid book ID");
+            Toast.makeText(this, "Ошибка: неверный идентификатор книги", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                // Construct URL for the Supabase delete request
+                String encodedId = URLEncoder.encode(bookId, "UTF-8");
+                URL url = new URL(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?id=eq." + encodedId);
+                Log.d(TAG, "Deleting book from Supabase: " + url.toString());
+                
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("DELETE");
+                conn.setRequestProperty("apikey", SUPABASE_KEY);
+                conn.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("Prefer", "return=minimal");
+                
+                int responseCode = conn.getResponseCode();
+                Log.d(TAG, "Supabase delete response code: " + responseCode);
+                
+                if (responseCode >= 200 && responseCode < 300) {
+                    runOnUiThread(() -> {
+                        Toast.makeText(BookActivity.this, "Книга успешно удалена", Toast.LENGTH_SHORT).show();
+                        
+                        // Set result and finish activity
+                        Intent resultIntent = new Intent();
+                        resultIntent.putExtra("BOOK_DELETED", true);
+                        resultIntent.putExtra("BOOK_ID", bookId);
+                        setResult(RESULT_OK, resultIntent);
+                        finish();
+                    });
+                    Log.d(TAG, "Book deleted from Supabase successfully");
+                } else {
+                    // Read error response
+                    BufferedReader in = new BufferedReader(new InputStreamReader(conn.getErrorStream()));
+                    String inputLine;
+                    StringBuilder response = new StringBuilder();
+                    while ((inputLine = in.readLine()) != null) {
+                        response.append(inputLine);
+                    }
+                    in.close();
+                    
+                    final String errorMsg = response.toString();
+                    Log.e(TAG, "Error deleting book from Supabase: " + responseCode + " " + errorMsg);
+                    
+                    runOnUiThread(() -> 
+                        Toast.makeText(BookActivity.this, "Ошибка при удалении книги: " + responseCode, Toast.LENGTH_SHORT).show()
+                    );
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Exception deleting book from Supabase", e);
+                runOnUiThread(() -> 
+                    Toast.makeText(BookActivity.this, "Ошибка: " + e.getMessage(), Toast.LENGTH_SHORT).show()
+                );
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
+        }).start();
     }
 
     private void updateBookStatus(String newStatus) {
@@ -749,12 +928,12 @@ public class BookActivity extends BaseActivity {
     
     private void syncBookStatus(String status, String endDate) {
         if (bookId == null || bookId.isEmpty()) {
-            Log.e("BookActivity", "Invalid book ID: null or empty");
+            Log.e(TAG, "Invalid book ID: null or empty");
             return;
         }
 
         // Use original status value directly
-        Log.d("BookActivity", "Syncing status to Supabase: " + status);
+        Log.d(TAG, "Syncing status to Supabase: " + status);
 
         new Thread(() -> {
             try {
@@ -776,7 +955,7 @@ public class BookActivity extends BaseActivity {
                         response.append(responseLine.trim());
                     }
                     br.close();
-                    Log.d("BookActivity", "Current book data: " + response.toString());
+                    Log.d(TAG, "Current book data: " + response.toString());
                 }
                 getConn.disconnect();
                 
@@ -802,14 +981,14 @@ public class BookActivity extends BaseActivity {
                 // Add end date if changing to "Прочитано"
                 if (endDate != null) {
                     data.put("finish_date", endDate);
-                    Log.d("BookActivity", "Setting finish_date to: " + endDate);
+                    Log.d(TAG, "Setting finish_date to: " + endDate);
                 }
                 
                 data.put("updated_at", new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
                     .format(new Date()));
                 
                 String jsonData = data.toString();
-                Log.d("BookActivity", "Sending data to Supabase: " + jsonData);
+                Log.d(TAG, "Sending data to Supabase: " + jsonData);
 
                 // Write data to connection
                 try (OutputStream os = conn.getOutputStream()) {
@@ -828,7 +1007,7 @@ public class BookActivity extends BaseActivity {
                         while ((responseLine = br.readLine()) != null) {
                             response.append(responseLine.trim());
                         }
-                        Log.e("BookActivity", "Error response: " + response.toString());
+                        Log.e(TAG, "Error response: " + response.toString());
                         throw new Exception("HTTP error code: " + responseCode + ", Response: " + response.toString());
                     }
                 } else {
@@ -836,7 +1015,7 @@ public class BookActivity extends BaseActivity {
                         "Статус книги успешно обновлен", Toast.LENGTH_SHORT).show());
                 }
             } catch (Exception e) {
-                Log.e("BookActivity", "Failed to sync book status with Supabase: " + e.getMessage());
+                Log.e(TAG, "Failed to sync book status with Supabase: " + e.getMessage());
                 runOnUiThread(() -> Toast.makeText(BookActivity.this, 
                     "Ошибка при обновлении статуса: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }

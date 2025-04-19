@@ -122,4 +122,15 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         
         return review;
     }
+    
+    /**
+     * Delete a book from the database by its ID
+     * @param bookId The ID of the book to delete
+     * @return true if deletion was successful, false otherwise
+     */
+    public boolean deleteBook(String bookId) {
+        SQLiteDatabase db = this.getWritableDatabase();
+        int rowsAffected = db.delete(TABLE_BOOKS, COLUMN_ID + " = ?", new String[] { bookId });
+        return rowsAffected > 0;
+    }
 } 

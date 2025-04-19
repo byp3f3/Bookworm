@@ -74,6 +74,8 @@ public class FilePickerActivity extends AppCompatActivity {
                         // Проверяем расширение файла, если MIME тип не определен
                         String fileName = uri.getLastPathSegment();
                         if (mimeType == null && fileName != null) {
+                            Log.d(TAG, "MIME type is null, checking extension of file: " + fileName);
+                            
                             if (fileName.toLowerCase().endsWith(".pdf")) {
                                 mimeType = "application/pdf";
                             } else if (fileName.toLowerCase().endsWith(".fb2")) {
@@ -90,9 +92,21 @@ public class FilePickerActivity extends AppCompatActivity {
                             // Читаем метаданные из файла
                             readMetadataAndProceed(uri);
                         } else {
-                            String message = "Неподдерживаемый формат файла: " + (mimeType != null ? mimeType : "неизвестный");
-                            Log.w(TAG, message);
-                            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                            // Более детальное сообщение об ошибке
+                            StringBuilder message = new StringBuilder("Неподдерживаемый формат файла");
+                            
+                            if (mimeType != null) {
+                                message.append(": ").append(mimeType);
+                            }
+                            
+                            if (fileName != null) {
+                                message.append("\nИмя файла: ").append(fileName);
+                            }
+                            
+                            message.append("\n\nПоддерживаются только FB2 и EPUB файлы");
+                            
+                            Log.w(TAG, message.toString());
+                            Toast.makeText(this, message.toString(), Toast.LENGTH_LONG).show();
                         }
                     } else {
                         Log.e(TAG, "Selected URI is null");
@@ -214,20 +228,22 @@ public class FilePickerActivity extends AppCompatActivity {
 
     private boolean isSupportedFileType(String mimeType, String fileName) {
         if (mimeType != null) {
-            return mimeType.equals("application/pdf") ||
-                    mimeType.equals("application/x-fictionbook+xml") ||
-                    mimeType.equals("text/x-fictionbook+xml") ||
-                    mimeType.equals("application/fb2") ||
-                    mimeType.equals("application/epub+zip") ||
-                    mimeType.equals("text/plain");
+            return mimeType.equals("application/x-fictionbook+xml") ||
+                   mimeType.equals("text/x-fictionbook+xml") ||
+                   mimeType.equals("application/fb2") ||
+                   mimeType.equals("application/xml") ||
+                   mimeType.equals("text/xml") ||
+                   mimeType.equals("text/plain") ||
+                   mimeType.equals("application/octet-stream") ||
+                   mimeType.equals("application/epub+zip");
         }
 
         if (fileName != null) {
             String lowerFileName = fileName.toLowerCase();
-            return lowerFileName.endsWith(".pdf") ||
-                    lowerFileName.endsWith(".fb2") ||
-                    lowerFileName.endsWith(".epub") ||
-                    lowerFileName.endsWith(".txt");
+            Log.d(TAG, "Checking file extension: " + lowerFileName);
+            return lowerFileName.endsWith(".fb2") ||
+                   lowerFileName.endsWith(".fb2.zip") ||
+                   lowerFileName.endsWith(".epub");
         }
 
         return false;
@@ -237,18 +253,29 @@ public class FilePickerActivity extends AppCompatActivity {
         Log.d(TAG, "Opening file picker");
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
+        
+        // Use a more generic MIME type first to show all documents
         intent.setType("*/*");
+        
+        // Add all possible FB2 and EPUB MIME types
         String[] mimeTypes = {
-                "application/pdf",
-                "application/x-fictionbook+xml", // Primary FB2 MIME
-                "text/x-fictionbook+xml",        // Alternative FB2 MIME
-                "application/fb2",               // Another alternative
-                "application/epub+zip",
-                "text/plain"
+                "application/x-fictionbook+xml",  // Primary FB2 MIME
+                "text/x-fictionbook+xml",         // Alternative FB2 MIME
+                "application/fb2",                // Another alternative
+                "application/octet-stream",       // Generic binary format
+                "text/plain",                     // Try text/plain as some systems use this for FB2
+                "application/xml",                // FB2 is XML-based
+                "text/xml",                       // Another XML option
+                "application/epub+zip"            // EPUB format
         };
         intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+        
+        // Add all possible flags
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        
         filePickerLauncher.launch(intent);
     }
 }

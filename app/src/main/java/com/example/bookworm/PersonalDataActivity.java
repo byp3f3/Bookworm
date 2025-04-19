@@ -87,24 +87,53 @@ public class PersonalDataActivity extends BaseActivity {
         progressDialog.setMessage("Обновление имени пользователя...");
         progressDialog.show();
 
-        getSupabaseAuth().updateUsername(newUsername, new SupabaseAuth.SupabaseCallback<String>() {
+        // Сначала проверить, существует ли пользователь с таким именем
+        getSupabaseAuth().checkUsernameExists(newUsername, new SupabaseAuth.SupabaseCallback<Boolean>() {
             @Override
-            public void onSuccess(String result) {
-                Log.d(TAG, "Username update successful, token: " + (result != null ? result.substring(0, 10) + "..." : "null"));
-                runOnUiThread(() -> {
-                    progressDialog.dismiss();
-                    usernameEditText.setText(newUsername);
-                    Toast.makeText(PersonalDataActivity.this, "Имя пользователя успешно обновлено", Toast.LENGTH_SHORT).show();
-                    loadUserData();
+            public void onSuccess(Boolean exists) {
+                if (exists) {
+                    runOnUiThread(() -> {
+                        progressDialog.dismiss();
+                        Toast.makeText(PersonalDataActivity.this, "Пользователь с таким именем уже существует", Toast.LENGTH_LONG).show();
+                    });
+                    return;
+                }
+                
+                // Если имя свободно, обновляем
+                getSupabaseAuth().updateUsername(newUsername, new SupabaseAuth.SupabaseCallback<String>() {
+                    @Override
+                    public void onSuccess(String result) {
+                        Log.d(TAG, "Username update successful, token: " + (result != null ? result.substring(0, 10) + "..." : "null"));
+                        runOnUiThread(() -> {
+                            progressDialog.dismiss();
+                            usernameEditText.setText(newUsername);
+                            Toast.makeText(PersonalDataActivity.this, "Имя пользователя успешно обновлено", Toast.LENGTH_SHORT).show();
+                            loadUserData();
+                        });
+                    }
+
+                    @Override
+                    public void onError(String error) {
+                        Log.e(TAG, "Username update failed: " + error);
+                        runOnUiThread(() -> {
+                            progressDialog.dismiss();
+                            
+                            if (error.equals("username_exists")) {
+                                Toast.makeText(PersonalDataActivity.this, "Пользователь с таким именем уже существует", Toast.LENGTH_LONG).show();
+                            } else {
+                                Toast.makeText(PersonalDataActivity.this, "Ошибка при обновлении имени пользователя: " + error, Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    }
                 });
             }
 
             @Override
             public void onError(String error) {
-                Log.e(TAG, "Username update failed: " + error);
+                Log.e(TAG, "Username check failed: " + error);
                 runOnUiThread(() -> {
                     progressDialog.dismiss();
-                    Toast.makeText(PersonalDataActivity.this, "Ошибка при обновлении имени пользователя: " + error, Toast.LENGTH_LONG).show();
+                    Toast.makeText(PersonalDataActivity.this, "Ошибка при проверке имени пользователя: " + error, Toast.LENGTH_LONG).show();
                 });
             }
         });

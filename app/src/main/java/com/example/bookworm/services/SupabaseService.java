@@ -15,6 +15,7 @@ import com.example.bookworm.Book;
 import com.example.bookworm.SupabaseAuth;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -31,6 +32,9 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.Date;
+import java.util.Locale;
+import java.text.SimpleDateFormat;
 
 public class SupabaseService {
 
@@ -50,6 +54,24 @@ public class SupabaseService {
 
     public interface FileUploadCallback {
         void onSuccess(String fileUrl);
+        void onError(String error);
+    }
+
+    public interface BookProgressCallback {
+        void onSuccess();
+        void onError(String error);
+    }
+
+    public interface BookProgressDataCallback {
+        void onSuccess(int currentPage);
+        void onError(String error);
+    }
+
+    /**
+     * Callback for retrieving a single book
+     */
+    public interface BookCallback {
+        void onSuccess(Book book);
         void onError(String error);
     }
 
@@ -642,6 +664,634 @@ public class SupabaseService {
     public interface BooksLoadCallback {
         void onSuccess(List<Book> books);
         void onError(String error);
+    }
+
+    /**
+     * Обновляет прогресс чтения книги (текущую страницу)
+     */
+    public void updateBookProgress(String bookId, int currentPage, BookProgressCallback callback) {
+        if (bookId == null) {
+            if (callback != null) {
+                mainHandler.post(() -> callback.onError("Null bookId"));
+            }
+            return;
+        }
+
+        // Выполняем в отдельном потоке
+        executorService.execute(() -> {
+            try {
+                // Получаем токен авторизации
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    if (callback != null) {
+                        mainHandler.post(() -> callback.onError("User not authenticated"));
+                    }
+                    return;
+                }
+
+                // Создаем JSON для обновления
+                JSONObject jsonParams = new JSONObject();
+                try {
+                    jsonParams.put("current_page", currentPage);
+                } catch (JSONException e) {
+                    if (callback != null) {
+                        mainHandler.post(() -> callback.onError("Ошибка формирования JSON: " + e.getMessage()));
+                    }
+                    return;
+                }
+
+                // Выполняем запрос
+                URL url = new URL(SUPABASE_URL + "/rest/v1/books?id=eq." + bookId);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("PATCH");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Prefer", "return=minimal");
+                connection.setRequestProperty("If-Match", "*");
+                
+                connection.setDoOutput(true);
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+
+                try (OutputStream os = connection.getOutputStream()) {
+                    byte[] input = jsonParams.toString().getBytes("UTF-8");
+                    os.write(input, 0, input.length);
+                }
+
+                int responseCode = connection.getResponseCode();
+                if (responseCode >= 200 && responseCode < 300) {
+                    Log.d(TAG, "Successfully updated book current_page to: " + currentPage);
+                    
+                    // Сразу проверяем результат обновления
+                    verifyPageUpdate(bookId, currentPage, accessToken, callback);
+                } else {
+                    String responseMessage = connection.getResponseMessage();
+                    String errorMessage = "Error updating book progress: " + responseCode + " " + responseMessage;
+                    Log.e(TAG, errorMessage);
+                    if (callback != null) {
+                        mainHandler.post(() -> callback.onError(errorMessage));
+                    }
+                }
+                
+                connection.disconnect();
+            } catch (Exception e) {
+                Log.e(TAG, "Exception updating book progress: " + e.getMessage());
+                if (callback != null) {
+                    mainHandler.post(() -> callback.onError("Ошибка обновления прогресса: " + e.getMessage()));
+                }
+            }
+        });
+    }
+    
+    /**
+     * Проверяет, что обновление страницы в Supabase действительно прошло успешно
+     */
+    private void verifyPageUpdate(String bookId, int expectedPage, String accessToken, BookProgressCallback callback) {
+        try {
+            URL url = new URL(SUPABASE_URL + "/rest/v1/books?id=eq." + bookId + "&select=current_page");
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+            connection.setRequestProperty("apikey", SUPABASE_KEY);
+            
+            int responseCode = connection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                String inputLine;
+                StringBuilder response = new StringBuilder();
+                
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
+                }
+                in.close();
+                
+                JSONArray jsonArray = new JSONArray(response.toString());
+                if (jsonArray.length() > 0) {
+                    JSONObject book = jsonArray.getJSONObject(0);
+                    int actualPage = book.getInt("current_page");
+                    
+                    if (actualPage == expectedPage) {
+                        Log.d(TAG, "Verified book page update: " + expectedPage);
+                        if (callback != null) {
+                            mainHandler.post(() -> callback.onSuccess());
+                        }
+                    } else {
+                        Log.w(TAG, "Page verification failed! Expected: " + expectedPage + ", Actual: " + actualPage + ". Retrying update...");
+                        // Повторная попытка обновления
+                        retryPageUpdate(bookId, expectedPage, accessToken, callback);
+                    }
+                } else {
+                    Log.e(TAG, "Book not found during verification");
+                    if (callback != null) {
+                        mainHandler.post(() -> callback.onError("Книга не найдена при проверке"));
+                    }
+                }
+            } else {
+                Log.e(TAG, "Error during verification: " + responseCode);
+                if (callback != null) {
+                    mainHandler.post(() -> callback.onSuccess()); // Считаем успешным, чтобы не блокировать UI
+                }
+            }
+            
+            connection.disconnect();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Exception during verification: " + e.getMessage());
+            if (callback != null) {
+                mainHandler.post(() -> callback.onSuccess()); // Считаем успешным, чтобы не блокировать UI
+            }
+        }
+    }
+    
+    /**
+     * Повторная попытка обновления страницы с принудительной синхронизацией
+     */
+    private void retryPageUpdate(String bookId, int currentPage, String accessToken, BookProgressCallback callback) {
+        try {
+            // Создаем JSON для обновления
+            JSONObject jsonParams = new JSONObject();
+            jsonParams.put("current_page", currentPage);
+            
+            URL url = new URL(SUPABASE_URL + "/rest/v1/books?id=eq." + bookId);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("PATCH");
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+            connection.setRequestProperty("apikey", SUPABASE_KEY);
+            connection.setRequestProperty("Prefer", "return=representation");  // Запрашиваем возврат данных после обновления
+            
+            connection.setDoOutput(true);
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
+
+            try (OutputStream os = connection.getOutputStream()) {
+                byte[] input = jsonParams.toString().getBytes("UTF-8");
+                os.write(input, 0, input.length);
+            }
+
+            int responseCode = connection.getResponseCode();
+            if (responseCode >= 200 && responseCode < 300) {
+                // Читаем ответ, чтобы убедиться в обновлении
+                BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                String inputLine;
+                StringBuilder response = new StringBuilder();
+                
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
+                }
+                in.close();
+                
+                Log.d(TAG, "Retry update response: " + response.toString());
+                Log.d(TAG, "Successfully forced book current_page update to: " + currentPage);
+                
+                if (callback != null) {
+                    mainHandler.post(() -> callback.onSuccess());
+                }
+            } else {
+                String errorMessage = "Error in retry update: " + responseCode;
+                Log.e(TAG, errorMessage);
+                if (callback != null) {
+                    mainHandler.post(() -> callback.onError(errorMessage));
+                }
+            }
+            
+            connection.disconnect();
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in retry update: " + e.getMessage());
+            if (callback != null) {
+                mainHandler.post(() -> callback.onError("Ошибка при повторном обновлении: " + e.getMessage()));
+            }
+        }
+    }
+
+    /**
+     * Updates the total page count of a book in Supabase
+     * @param bookId The ID of the book
+     * @param pageCount The total number of pages
+     * @param callback Callback to handle success or error
+     */
+    public void updateBookPageCount(String bookId, int pageCount, BookProgressCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+
+            try {
+                // 1. Authentication check
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                // 2. Prepare JSON data
+                JSONObject updateData = new JSONObject();
+                updateData.put("page_count", pageCount);
+
+                // 3. Configure connection
+                URL url = new URL(SUPABASE_URL + "/rest/v1/books?id=eq." + bookId);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("PATCH");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setRequestProperty("Prefer", "return=minimal");
+                connection.setDoOutput(true);
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+
+                // 4. Send data
+                try (OutputStream os = connection.getOutputStream()) {
+                    byte[] input = updateData.toString().getBytes(StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+
+                // 5. Handle response
+                int responseCode = connection.getResponseCode();
+                if (responseCode >= 200 && responseCode < 300) {
+                    Log.d(TAG, "Successfully updated book page_count to: " + pageCount);
+                    notifySuccess(callback);
+                } else {
+                    String errorMsg = readErrorResponse(connection);
+                    Log.e(TAG, "Update page_count failed: " + responseCode + " - " + errorMsg);
+                    notifyError(callback, "Update failed: " + responseCode + " - " + errorMsg);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error updating book page count", e);
+                notifyError(callback, "Network error: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    private void notifySuccess(BookProgressCallback callback) {
+        if (callback != null) {
+            mainHandler.post(callback::onSuccess);
+        }
+    }
+
+    private void notifyError(BookProgressCallback callback, String error) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onError(error));
+        }
+    }
+
+    /**
+     * Получает текущий прогресс чтения книги из Supabase
+     * @param bookId ID книги
+     * @param callback Callback для обработки ответа
+     */
+    public void getBookProgress(String bookId, BookProgressDataCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+
+            try {
+                // 1. Проверка аутентификации
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                // 2. Настройка соединения
+                URL url = new URL(SUPABASE_URL + "/rest/v1/books?id=eq." + bookId + "&select=current_page");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+
+                // 3. Обработка ответа
+                int responseCode = connection.getResponseCode();
+                if (responseCode >= 200 && responseCode < 300) {
+                    BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+                    reader.close();
+
+                    try {
+                        // Парсинг JSON ответа
+                        JSONArray jsonArray = new JSONArray(response.toString());
+                        if (jsonArray.length() > 0) {
+                            JSONObject book = jsonArray.getJSONObject(0);
+                            int currentPage = book.getInt("current_page");
+                            Log.d(TAG, "Retrieved current_page from Supabase: " + currentPage + " for book " + bookId);
+                            notifySuccess(callback, currentPage);
+                        } else {
+                            notifyError(callback, "Book not found");
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error parsing book progress data", e);
+                        notifyError(callback, "Error parsing data: " + e.getMessage());
+                    }
+                } else {
+                    String errorMsg = readErrorResponse(connection);
+                    Log.e(TAG, "Get book progress failed: " + responseCode + " - " + errorMsg);
+                    notifyError(callback, "Request failed: " + responseCode + " - " + errorMsg);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error getting book progress", e);
+                notifyError(callback, "Network error: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    private void notifySuccess(BookProgressDataCallback callback, int currentPage) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onSuccess(currentPage));
+        }
+    }
+
+    private void notifyError(BookProgressDataCallback callback, String error) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onError(error));
+        }
+    }
+
+    /**
+     * Retrieves a book by its ID from Supabase
+     * @param bookId ID of the book to retrieve
+     * @param callback Callback to handle the response
+     */
+    public void getBookById(String bookId, BookCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            BufferedReader reader = null;
+
+            try {
+                // 1. Authentication check
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                // 2. Configure connection
+                String urlString = SUPABASE_URL + "/rest/v1/books?id=eq." + bookId;
+                URL url = new URL(urlString);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+
+                // 3. Handle response
+                int responseCode = connection.getResponseCode();
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+
+                    String responseData = response.toString();
+                    Log.d(TAG, "getBookById response: " + responseData);
+
+                    JSONArray booksArray = new JSONArray(responseData);
+                    if (booksArray.length() > 0) {
+                        JSONObject bookJson = booksArray.getJSONObject(0);
+                        Book book = new Book();
+                        book.setId(bookJson.getString("id"));
+                        book.setTitle(bookJson.getString("title"));
+                        book.setAuthor(bookJson.getString("author"));
+                        book.setDescription(bookJson.optString("description", ""));
+                        book.setTotalPages(bookJson.optInt("page_count", 0));
+                        book.setCurrentPage(bookJson.optInt("current_page", 0));
+                        book.setStatus(bookJson.optString("status", "В планах"));
+                        book.setCoverPath(bookJson.optString("cover_image_url", null));
+                        book.setStartDate(bookJson.optString("start_date", null));
+                        book.setEndDate(bookJson.optString("finish_date", null));
+                        book.setRating(bookJson.optInt("rating", 0));
+
+                        notifySuccess(callback, book);
+                    } else {
+                        notifyError(callback, "Book not found");
+                    }
+                } else {
+                    String errorMsg = readErrorResponse(connection);
+                    Log.e(TAG, "Failed to get book: " + responseCode + " - " + errorMsg);
+                    notifyError(callback, "Failed to get book: " + responseCode + " - " + errorMsg);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error getting book", e);
+                notifyError(callback, "Error: " + e.getMessage());
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException e) {
+                        Log.w(TAG, "Error closing reader", e);
+                    }
+                }
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    private void notifySuccess(BookCallback callback, Book book) {
+        mainHandler.post(() -> callback.onSuccess(book));
+    }
+
+    private void notifyError(BookCallback callback, String error) {
+        mainHandler.post(() -> callback.onError(error));
+    }
+
+    /**
+     * Принудительно обновляет current_page с блокировкой потока
+     * Используется только для критических случаев синхронизации
+     */
+    public void forceUpdateBookPage(String bookId, int currentPage) {
+        if (bookId == null) {
+            Log.e(TAG, "BookId is null, cannot update current page");
+            return;
+        }
+        
+        try {
+            // Создаем данные для обновления
+            JSONObject jsonData = new JSONObject();
+            jsonData.put("current_page", currentPage);
+
+            // Формируем URL
+            String endpoint = SUPABASE_URL + "/rest/v1/books?id=eq." + bookId;
+            
+            // Создаем соединение
+            URL url = new URL(endpoint);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("PATCH");
+            connection.setRequestProperty("apikey", SUPABASE_KEY);
+            connection.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Prefer", "return=representation");
+            
+            // Важно: добавляем If-Match заголовок для предотвращения конфликтов
+            connection.setRequestProperty("If-Match", "*");
+            
+            connection.setDoOutput(true);
+            
+            // Записываем данные
+            OutputStream os = connection.getOutputStream();
+            os.write(jsonData.toString().getBytes());
+            os.flush();
+            os.close();
+            
+            // Проверяем ответ
+            int responseCode = connection.getResponseCode();
+            
+            if (responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_NO_CONTENT) {
+                Log.d(TAG, "⚡ Force update successful: page " + currentPage + " for book " + bookId);
+                
+                // Проверяем, что обновление действительно применилось
+                verifyPageUpdate(bookId, currentPage);
+            } else {
+                Log.e(TAG, "⚡ Force update failed with code: " + responseCode);
+                
+                // Читаем сообщение об ошибке
+                InputStream errorStream = connection.getErrorStream();
+                if (errorStream != null) {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(errorStream));
+                    StringBuilder errorMessage = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        errorMessage.append(line);
+                    }
+                    reader.close();
+                    Log.e(TAG, "Error details: " + errorMessage.toString());
+                }
+            }
+            
+            connection.disconnect();
+        } catch (Exception e) {
+            Log.e(TAG, "Error during force update: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Проверяет, что значение current_page в базе соответствует ожидаемому
+     * и при необходимости выполняет обновление
+     */
+    public void verifyAndUpdateBookData(String bookId, int expectedPage) {
+        if (bookId == null) {
+            return;
+        }
+        
+        executorService.execute(() -> {
+            try {
+                // Получаем текущее значение из базы
+                String endpoint = SUPABASE_URL + "/rest/v1/books?id=eq." + bookId + "&select=current_page";
+                URL url = new URL(endpoint);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
+                connection.setRequestProperty("Content-Type", "application/json");
+
+                int responseCode = connection.getResponseCode();
+                
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    // Читаем ответ
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+                    reader.close();
+                    
+                    // Парсим JSON
+                    JSONArray jsonArray = new JSONArray(response.toString());
+                    if (jsonArray.length() > 0) {
+                        JSONObject bookData = jsonArray.getJSONObject(0);
+                        int actualPage = bookData.optInt("current_page", -1);
+                        
+                        if (actualPage != expectedPage) {
+                            Log.w(TAG, "⚠️ Обнаружено несоответствие: ожидалась страница " + expectedPage + 
+                                    ", но в базе " + actualPage + ". Выполняем синхронизацию.");
+                            
+                            // Принудительно обновляем страницу в базе
+                            forceUpdateBookPage(bookId, expectedPage);
+                        } else {
+                            Log.d(TAG, "✅ Проверка страницы: в базе корректное значение " + actualPage);
+                        }
+                    }
+                } else {
+                    Log.e(TAG, "Ошибка при проверке текущей страницы: " + responseCode);
+                }
+                
+                connection.disconnect();
+            } catch (Exception e) {
+                Log.e(TAG, "Ошибка при проверке текущей страницы: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    /**
+     * Проверяет, что значение current_page в базе соответствует ожидаемому
+     */
+    private boolean verifyPageUpdate(String bookId, int expectedPage) {
+        try {
+            // Получаем текущее значение из базы
+            String endpoint = SUPABASE_URL + "/rest/v1/books?id=eq." + bookId + "&select=current_page";
+            URL url = new URL(endpoint);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("apikey", SUPABASE_KEY);
+            connection.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
+            connection.setRequestProperty("Content-Type", "application/json");
+
+            int responseCode = connection.getResponseCode();
+            
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                // Читаем ответ
+                BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
+                }
+                reader.close();
+                
+                // Парсим JSON
+                JSONArray jsonArray = new JSONArray(response.toString());
+                if (jsonArray.length() > 0) {
+                    JSONObject bookData = jsonArray.getJSONObject(0);
+                    int actualPage = bookData.optInt("current_page", -1);
+                    
+                    if (actualPage != expectedPage) {
+                        Log.w(TAG, "⚠️ Верификация не прошла: ожидалась страница " + expectedPage + 
+                                ", но в базе " + actualPage);
+                        return false;
+                    } else {
+                        Log.d(TAG, "✅ Верификация прошла успешно: страница " + actualPage);
+                        return true;
+                    }
+                }
+            }
+            
+            connection.disconnect();
+        } catch (Exception e) {
+            Log.e(TAG, "Ошибка при верификации страницы: " + e.getMessage(), e);
+        }
+        
+        return false;
     }
 }
 

@@ -50,7 +50,6 @@
         <activity android:name=".BookActivity" />
         <activity android:name=".BookReaderActivity" />
         <activity android:name=".AddBookActivity" />
-        <activity android:name=".AddBookDialogActivity" />
     </application>
 
 </manifest>

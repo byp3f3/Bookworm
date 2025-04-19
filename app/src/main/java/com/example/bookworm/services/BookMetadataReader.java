@@ -28,9 +28,49 @@ import org.xmlpull.v1.XmlPullParserFactory;
 public class BookMetadataReader {
     private static final String TAG = "BookMetadataReader";
 
+    private Context context;
+
+    public BookMetadataReader(Context context) {
+        this.context = context;
+    }
+
     public interface MetadataCallback {
         void onMetadataReady(Map<String, String> metadata);
         void onError(String error);
+    }
+    
+    public interface MetadataCallback2 {
+        void onMetadataExtracted(String title, String author, String description, int pageCount);
+        void onError(String error);
+    }
+
+    // Method that adapts the new interface to the existing implementation
+    public void readMetadata(Uri fileUri, MetadataCallback2 callback) {
+        readMetadata(context, fileUri, new MetadataCallback() {
+            @Override
+            public void onMetadataReady(Map<String, String> metadata) {
+                String title = metadata.getOrDefault("title", "");
+                String author = metadata.getOrDefault("author", "");
+                String description = metadata.getOrDefault("description", "");
+                
+                // Extract page count
+                int pageCount = 0;
+                if (metadata.containsKey("pages")) {
+                    try {
+                        pageCount = Integer.parseInt(metadata.get("pages"));
+                    } catch (NumberFormatException e) {
+                        Log.e(TAG, "Error parsing page count", e);
+                    }
+                }
+                
+                callback.onMetadataExtracted(title, author, description, pageCount);
+            }
+
+            @Override
+            public void onError(String error) {
+                callback.onError(error);
+            }
+        });
     }
 
     public static void readMetadata(Context context, Uri fileUri, MetadataCallback callback) {
@@ -60,7 +100,7 @@ public class BookMetadataReader {
             readEpubMetadata(context, fileUri, callback);
         } else if (lowerFileName.endsWith(".fb2")) {
             readFb2Metadata(context, fileUri, callback);
-        } else if (lowerFileName.endsWith(".fb2.zip")) {
+        } else if (lowerFileName.endsWith(".fb2.zip") || (lowerFileName.endsWith(".zip") && lowerFileName.contains("fb2"))) {
             readFb2ZipMetadata(context, fileUri, callback);
         } else if (lowerFileName.endsWith(".txt")) {
             readTxtMetadata(context, fileUri, callback);
@@ -199,6 +239,10 @@ public class BookMetadataReader {
         String coverId = null;
         String coverPath = null;
         Map<String, String> idMap = new HashMap<>();
+        boolean inMetadata = false;
+        boolean inManifest = false;
+        boolean inSpine = false;
+        int pageCount = 0;
 
         while (eventType != XmlPullParser.END_DOCUMENT) {
             switch (eventType) {
@@ -206,85 +250,93 @@ public class BookMetadataReader {
                     currentTag = parser.getName();
                     currentValue = new StringBuilder();
                     
+                    if ("metadata".equals(currentTag)) {
+                        inMetadata = true;
+                    } else if ("manifest".equals(currentTag)) {
+                        inManifest = true;
+                    } else if ("spine".equals(currentTag)) {
+                        inSpine = true;
+                    }
+                    
                     // Ищем мета-тег с ID обложки
                     if ("meta".equals(currentTag)) {
                         String name = parser.getAttributeValue(null, "name");
-                        String content = parser.getAttributeValue(null, "content");
-                        if ("cover".equals(name) && content != null) {
-                            coverId = content;
-                            Log.d(TAG, "Found cover ID: " + coverId);
+                        if ("cover".equals(name)) {
+                            coverId = parser.getAttributeValue(null, "content");
                         }
                     }
                     
-                    // Ищем элемент с ID обложки в манифесте
-                    if ("item".equals(currentTag)) {
+                    // Ищем элемент с количеством страниц
+                    if ("meta".equals(currentTag) && inMetadata) {
+                        String name = parser.getAttributeValue(null, "name");
+                        if ("page-count".equals(name)) {
+                            String content = parser.getAttributeValue(null, "content");
+                            try {
+                                pageCount = Integer.parseInt(content);
+                                metadata.put("pages", String.valueOf(pageCount));
+                            } catch (NumberFormatException e) {
+                                Log.e(TAG, "Error parsing page count", e);
+                            }
+                        }
+                    }
+                    
+                    // Ищем элемент с путем к обложке
+                    if ("item".equals(currentTag) && inManifest) {
                         String id = parser.getAttributeValue(null, "id");
                         String href = parser.getAttributeValue(null, "href");
                         if (id != null && href != null) {
                             idMap.put(id, href);
-                            if (id.equals(coverId)) {
+                            if (coverId != null && id.equals(coverId)) {
                                 coverPath = href;
-                                Log.d(TAG, "Found cover path from ID: " + coverPath);
-                            } else if (id.contains("cover") || id.contains("Cover")) {
-                                // Как запасной вариант, ищем элемент с ID, содержащим "cover"
-                                coverPath = href;
-                                Log.d(TAG, "Found potential cover path from ID: " + coverPath);
                             }
                         }
                     }
                     break;
 
                 case XmlPullParser.TEXT:
-                    if (currentTag != null) {
+                    if (currentValue != null) {
                         currentValue.append(parser.getText());
                     }
                     break;
 
                 case XmlPullParser.END_TAG:
-                    if (currentTag != null) {
+                    if (currentValue != null && currentTag != null) {
                         String value = currentValue.toString().trim();
-                        if (!value.isEmpty()) {
-                            switch (currentTag) {
-                                case "dc:title":
-                                    metadata.put("title", value);
-                                    break;
-                                case "dc:creator":
-                                    metadata.put("author", value);
-                                    break;
-                                case "dc:description":
-                                    metadata.put("description", value);
-                                    break;
-                                case "dc:language":
-                                    metadata.put("language", value);
-                                    break;
-                                case "dc:publisher":
-                                    metadata.put("publisher", value);
-                                    break;
-                                case "dc:date":
-                                    metadata.put("publicationDate", value);
-                                    break;
+                        if (inMetadata) {
+                            if ("dc:title".equals(currentTag)) {
+                                metadata.put("title", value);
+                            } else if ("dc:creator".equals(currentTag)) {
+                                metadata.put("author", value);
+                            } else if ("dc:description".equals(currentTag)) {
+                                metadata.put("description", value);
                             }
                         }
-                        currentTag = null;
+                    }
+                    
+                    if ("metadata".equals(currentTag)) {
+                        inMetadata = false;
+                    } else if ("manifest".equals(currentTag)) {
+                        inManifest = false;
+                    } else if ("spine".equals(currentTag)) {
+                        inSpine = false;
                     }
                     break;
             }
             eventType = parser.next();
         }
-        
-        // Если нашли ID обложки, возвращаем путь
-        if (coverId != null && idMap.containsKey(coverId)) {
-            return idMap.get(coverId);
+
+        // Если не нашли количество страниц в метаданных, пробуем подсчитать по spine
+        if (!metadata.containsKey("pages") && !idMap.isEmpty()) {
+            pageCount = idMap.size();
+            metadata.put("pages", String.valueOf(pageCount));
         }
-        
+
         return coverPath;
     }
 
     private static void readFb2Metadata(Context context, Uri fileUri, MetadataCallback callback) {
         InputStream inputStream = null;
-
         try {
-            Map<String, String> metadata = new HashMap<>();
             inputStream = context.getContentResolver().openInputStream(fileUri);
             if (inputStream == null) {
                 callback.onError("Не удалось открыть файл");
@@ -292,119 +344,79 @@ public class BookMetadataReader {
             }
 
             XmlPullParser parser = XmlPullParserFactory.newInstance().newPullParser();
-            parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true);
             parser.setInput(inputStream, "UTF-8");
 
+            Map<String, String> metadata = new HashMap<>();
             int eventType = parser.getEventType();
+            String currentTag = null;
+            StringBuilder currentValue = new StringBuilder();
             boolean inTitleInfo = false;
-            boolean inAuthor = false;
-            boolean inBinary = false;
-            String binaryId = null;
-            String binaryContentType = null;
-            StringBuilder authorBuilder = new StringBuilder();
-            StringBuilder coverDataBuilder = null;
-            String currentElement = null;
+            boolean inDocumentInfo = false;
+            boolean inPublishInfo = false;
+            boolean inBody = false;
+            int pageCount = 0;
 
             while (eventType != XmlPullParser.END_DOCUMENT) {
                 switch (eventType) {
                     case XmlPullParser.START_TAG:
-                        currentElement = parser.getName();
-                        if ("title-info".equals(currentElement)) {
+                        currentTag = parser.getName();
+                        currentValue = new StringBuilder();
+                        
+                        if ("title-info".equals(currentTag)) {
                             inTitleInfo = true;
-                        } else if (inTitleInfo && "author".equals(currentElement)) {
-                            inAuthor = true;
-                            authorBuilder = new StringBuilder();
-                        } else if ("binary".equals(currentElement)) {
-                            inBinary = true;
-                            binaryId = parser.getAttributeValue(null, "id");
-                            binaryContentType = parser.getAttributeValue(null, "content-type");
-                            
-                            // Проверяем, является ли binary элемент обложкой
-                            boolean isCover = (binaryId != null && (binaryId.equals("cover") || 
-                                    binaryId.toLowerCase().contains("cover") || 
-                                    binaryId.equals("image_0"))) &&
-                                    (binaryContentType != null && binaryContentType.startsWith("image/"));
-                            
-                            if (isCover) {
-                                Log.d(TAG, "Found potential cover image: id=" + binaryId + ", type=" + binaryContentType);
-                                coverDataBuilder = new StringBuilder();
-                            } else {
-                                coverDataBuilder = null;
-                            }
+                        } else if ("document-info".equals(currentTag)) {
+                            inDocumentInfo = true;
+                        } else if ("publish-info".equals(currentTag)) {
+                            inPublishInfo = true;
+                        } else if ("body".equals(currentTag)) {
+                            inBody = true;
                         }
                         break;
 
                     case XmlPullParser.TEXT:
-                        if (inTitleInfo) {
-                            String text = parser.getText().trim();
-                            if (!text.isEmpty()) {
-                                if ("book-title".equals(currentElement)) {
-                                    metadata.put("title", text);
-                                } else if (inAuthor) {
-                                    if ("first-name".equals(currentElement) ||
-                                            "last-name".equals(currentElement) ||
-                                            "middle-name".equals(currentElement)) {
-                                        authorBuilder.append(text).append(" ");
-                                    }
-                                } else if ("annotation".equals(currentElement)) {
-                                    metadata.put("description", text);
-                                }
-                            }
-                        } else if (inBinary && coverDataBuilder != null) {
-                            // Собираем Base64-данные изображения
-                            coverDataBuilder.append(parser.getText().trim());
+                        if (currentValue != null) {
+                            currentValue.append(parser.getText());
                         }
                         break;
 
                     case XmlPullParser.END_TAG:
-                        if ("title-info".equals(parser.getName())) {
-                            inTitleInfo = false;
-                        } else if ("author".equals(parser.getName())) {
-                            inAuthor = false;
-                            if (authorBuilder.length() > 0) {
-                                metadata.put("author", authorBuilder.toString().trim());
-                            }
-                        } else if ("binary".equals(parser.getName())) {
-                            // Если закончили чтение элемента binary и это была обложка
-                            if (inBinary && coverDataBuilder != null && coverDataBuilder.length() > 0) {
-                                try {
-                                    // Декодируем Base64 в байты
-                                    byte[] imageBytes = android.util.Base64.decode(
-                                            coverDataBuilder.toString(), android.util.Base64.DEFAULT);
-                                    
-                                    // Создаем Bitmap из байтов
-                                    Bitmap coverBitmap = BitmapFactory.decodeByteArray(
-                                            imageBytes, 0, imageBytes.length);
-                                    
-                                    if (coverBitmap != null) {
-                                        // Сохраняем обложку во временный файл
-                                        File coverFile = File.createTempFile("cover", ".jpg", context.getCacheDir());
-                                        FileOutputStream out = new FileOutputStream(coverFile);
-                                        String extension = binaryContentType.contains("png") ? ".png" : ".jpg";
-                                        Bitmap.CompressFormat format = extension.equals(".png") ? 
-                                                Bitmap.CompressFormat.PNG : Bitmap.CompressFormat.JPEG;
-                                        
-                                        coverBitmap.compress(format, 100, out);
-                                        out.flush();
-                                        out.close();
-                                        
-                                        // Добавляем путь к обложке в метаданные
-                                        metadata.put("coverPath", coverFile.getAbsolutePath());
-                                        Log.d(TAG, "FB2 cover image saved to: " + coverFile.getAbsolutePath());
+                        if (currentValue != null && currentTag != null) {
+                            String value = currentValue.toString().trim();
+                            if (inTitleInfo) {
+                                if ("book-title".equals(currentTag)) {
+                                    metadata.put("title", value);
+                                } else if ("author".equals(currentTag)) {
+                                    metadata.put("author", value);
+                                } else if ("annotation".equals(currentTag)) {
+                                    metadata.put("description", value);
+                                }
+                            } else if (inDocumentInfo) {
+                                if ("page-count".equals(currentTag)) {
+                                    try {
+                                        pageCount = Integer.parseInt(value);
+                                        metadata.put("pages", String.valueOf(pageCount));
+                                    } catch (NumberFormatException e) {
+                                        Log.e(TAG, "Error parsing page count", e);
                                     }
-                                } catch (Exception e) {
-                                    Log.e(TAG, "Error saving cover image from FB2", e);
                                 }
                             }
-                            inBinary = false;
-                            coverDataBuilder = null;
+                        }
+                        
+                        if ("title-info".equals(currentTag)) {
+                            inTitleInfo = false;
+                        } else if ("document-info".equals(currentTag)) {
+                            inDocumentInfo = false;
+                        } else if ("publish-info".equals(currentTag)) {
+                            inPublishInfo = false;
+                        } else if ("body".equals(currentTag)) {
+                            inBody = false;
                         }
                         break;
                 }
                 eventType = parser.next();
             }
 
-            // Fallback на имя файла, если нет метаданных
+            // Если не нашли метаданные, используем имя файла как заголовок
             if (!metadata.containsKey("title")) {
                 metadata.put("title", getFileNameWithoutExtension(fileUri.getLastPathSegment()));
             }
@@ -521,10 +533,22 @@ public class BookMetadataReader {
                     }
                     fos.close();
                     
+                    // Estimate page count based on file size
+                    long fileSize = tempFb2File.length();
+                    int estimatedPages = estimatePages(fileSize);
+                    
+                    // Create a final copy of the entry name for use in the callback
+                    final String finalEntryName = entry.getName();
+                    
                     // Читаем метаданные из распакованного FB2 файла
                     readFb2Metadata(context, Uri.fromFile(tempFb2File), new MetadataCallback() {
                         @Override
                         public void onMetadataReady(Map<String, String> extractedMetadata) {
+                            // Add estimated page count if not present
+                            if (!extractedMetadata.containsKey("pages") && estimatedPages > 0) {
+                                extractedMetadata.put("pages", String.valueOf(estimatedPages));
+                            }
+                            
                             // Передаем метаданные в исходный callback
                             callback.onMetadataReady(extractedMetadata);
                             
@@ -535,7 +559,18 @@ public class BookMetadataReader {
                         @Override
                         public void onError(String error) {
                             Log.e(TAG, "Error reading FB2 from ZIP: " + error);
-                            callback.onError("Ошибка при чтении FB2 из архива: " + error);
+                            
+                            // If FB2 extraction failed but we have a file size,
+                            // create basic metadata with estimated page count
+                            if (estimatedPages > 0) {
+                                Map<String, String> basicMetadata = new HashMap<>();
+                                basicMetadata.put("title", getFileNameWithoutExtension(finalEntryName));
+                                basicMetadata.put("pages", String.valueOf(estimatedPages));
+                                callback.onMetadataReady(basicMetadata);
+                            } else {
+                                callback.onError("Ошибка при чтении FB2 из архива: " + error);
+                            }
+                            
                             tempFb2File.delete();
                         }
                     });

@@ -25,6 +25,7 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.UUID;
 import java.io.File;
+import java.text.ParseException;
 
 import com.example.bookworm.services.BookMetadataReader;
 import com.example.bookworm.services.SupabaseService;
@@ -33,6 +34,7 @@ public class AddBookActivity extends AppCompatActivity {
 
     private static final String TAG = "AddBookActivity";
     private static final int PICK_IMAGE_REQUEST = 2;
+    private static final int PICK_FILE_REQUEST = 3;
 
     private EditText titleInput;
     private EditText authorInput;
@@ -53,6 +55,7 @@ public class AddBookActivity extends AppCompatActivity {
     private String selectedCoverPath;
     private Calendar calendar;
     private SimpleDateFormat dateFormat;
+    private SimpleDateFormat dbDateFormat;
     private SupabaseService supabaseService;
     private Context context;
 
@@ -62,6 +65,7 @@ public class AddBookActivity extends AppCompatActivity {
         setContentView(R.layout.activity_add_book);
         calendar = Calendar.getInstance();
         dateFormat = new SimpleDateFormat("dd.MM.yyyy", Locale.getDefault());
+        dbDateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
         supabaseService = new SupabaseService(this);
         context = this;
 
@@ -156,6 +160,7 @@ public class AddBookActivity extends AppCompatActivity {
             startActivityForResult(intent, PICK_IMAGE_REQUEST);
         });
 
+
         addButton.setOnClickListener(v -> addBook());
     }
 
@@ -180,29 +185,84 @@ public class AddBookActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode == Activity.RESULT_OK && data != null) {
             Uri uri = data.getData();
-            if (uri != null && requestCode == PICK_IMAGE_REQUEST) {
-                // Take persistable permission
-                try {
-                    final int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
-                    getContentResolver().takePersistableUriPermission(uri, takeFlags);
-                    Log.d(TAG, "Successfully took persistable URI permission for: " + uri);
-                } catch (SecurityException e) {
-                    Log.e(TAG, "Failed to take persistable URI permission: " + e.getMessage());
-                    // We still continue because we might be able to access the file anyway
+            if (uri != null) {
+                if (requestCode == PICK_IMAGE_REQUEST) {
+                    // Take persistable permission
+                    try {
+                        final int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+                        getContentResolver().takePersistableUriPermission(uri, takeFlags);
+                        Log.d(TAG, "Successfully took persistable URI permission for: " + uri);
+                    } catch (SecurityException e) {
+                        Log.e(TAG, "Failed to take persistable URI permission: " + e.getMessage());
+                    }
+                    
+                    selectedCoverPath = uri.toString();
+                    Log.d(TAG, "Cover selected: " + selectedCoverPath);
+                    
+                    if (coverPreview != null) {
+                        coverPreview.setImageURI(uri);
+                        coverPreview.setVisibility(View.VISIBLE);
+                        selectCoverButton.setText("Изменить обложку");
+                    }
+                    
+                    Toast.makeText(this, "Обложка выбрана", Toast.LENGTH_SHORT).show();
+                } else if (requestCode == PICK_FILE_REQUEST) {
+                    // Take persistable permission
+                    try {
+                        final int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+                        getContentResolver().takePersistableUriPermission(uri, takeFlags);
+                        Log.d(TAG, "Successfully took persistable URI permission for: " + uri);
+                    } catch (SecurityException e) {
+                        Log.e(TAG, "Failed to take persistable URI permission: " + e.getMessage());
+                    }
+                    
+                    selectedFilePath = uri.toString();
+                    Log.d(TAG, "File selected: " + selectedFilePath);
+                    
+                    // Extract metadata from the selected file
+                    extractMetadata(uri);
                 }
-                
-                selectedCoverPath = uri.toString();
-                Log.d(TAG, "Cover selected: " + selectedCoverPath);
-                
-                // Показываем обложку и меняем текст кнопки
-                if (coverPreview != null) {
-                    coverPreview.setImageURI(uri);
-                    coverPreview.setVisibility(View.VISIBLE);
-                    selectCoverButton.setText("Изменить обложку");
-                }
-                
-                Toast.makeText(this, "Обложка выбрана", Toast.LENGTH_SHORT).show();
             }
+        }
+    }
+
+    private void extractMetadata(Uri fileUri) {
+        try {
+            BookMetadataReader metadataReader = new BookMetadataReader(this);
+            metadataReader.readMetadata(fileUri, new BookMetadataReader.MetadataCallback2() {
+                @Override
+                public void onMetadataExtracted(String title, String author, String description, int pageCount) {
+                    runOnUiThread(() -> {
+                        if (title != null && !title.isEmpty()) {
+                            titleInput.setText(title);
+                        }
+                        if (author != null && !author.isEmpty()) {
+                            authorInput.setText(author);
+                        }
+                        if (description != null && !description.isEmpty()) {
+                            descriptionInput.setText(description);
+                        }
+                        if (pageCount > 0) {
+                            pagesInput.setText(String.valueOf(pageCount));
+                        }
+                    });
+                }
+
+                @Override
+                public void onError(String error) {
+                    Log.e(TAG, "Error extracting metadata: " + error);
+                    runOnUiThread(() -> {
+                        Toast.makeText(AddBookActivity.this, 
+                            "Не удалось извлечь метаданные: " + error, 
+                            Toast.LENGTH_LONG).show();
+                    });
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Error starting metadata extraction: " + e.getMessage());
+            Toast.makeText(this, 
+                "Ошибка при чтении метаданных: " + e.getMessage(), 
+                Toast.LENGTH_LONG).show();
         }
     }
 
@@ -239,20 +299,43 @@ public class AddBookActivity extends AppCompatActivity {
             status = "В планах";
         } else if (statusId == R.id.readingRadio) {
             status = "Читаю";
-            startDate = startDateInput.getText().toString().trim();
-            if (startDate.isEmpty()) {
+            String displayStartDate = startDateInput.getText().toString().trim();
+            if (displayStartDate.isEmpty()) {
                 Toast.makeText(this, "Пожалуйста, укажите дату начала чтения", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            try {
+                Date date = dateFormat.parse(displayStartDate);
+                startDate = dbDateFormat.format(date);
+            } catch (ParseException e) {
+                Toast.makeText(this, "Ошибка в формате даты", Toast.LENGTH_SHORT).show();
                 return;
             }
         } else {
             status = "Прочитано";
-            startDate = startDateInput.getText().toString().trim();
-            endDate = endDateInput.getText().toString().trim();
+            String displayStartDate = startDateInput.getText().toString().trim();
+            String displayEndDate = endDateInput.getText().toString().trim();
             rating = (int) ratingBar.getRating();
             review = reviewInput.getText().toString().trim();
             
-            if (startDate.isEmpty() || endDate.isEmpty()) {
+            if (displayStartDate.isEmpty() || displayEndDate.isEmpty()) {
                 Toast.makeText(this, "Пожалуйста, укажите даты чтения", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            
+            try {
+                Date startDateObj = dateFormat.parse(displayStartDate);
+                Date endDateObj = dateFormat.parse(displayEndDate);
+                startDate = dbDateFormat.format(startDateObj);
+                endDate = dbDateFormat.format(endDateObj);
+                
+                // Validate end date is not before start date
+                if (endDateObj.before(startDateObj)) {
+                    Toast.makeText(this, "Дата окончания не может быть раньше даты начала", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+            } catch (ParseException e) {
+                Toast.makeText(this, "Ошибка в формате даты", Toast.LENGTH_SHORT).show();
                 return;
             }
         }
@@ -274,7 +357,6 @@ public class AddBookActivity extends AppCompatActivity {
             rating,
             review,
             getFileFormatFromUrl(selectedFilePath)
-
         );
 
         // Используем уже созданный экземпляр supabaseService
@@ -310,7 +392,6 @@ public class AddBookActivity extends AppCompatActivity {
         });
     }
 
-
     private String getFileFormatFromUrl(String fileUrl) {
         if (fileUrl == null) return "UNKNOWN";
 
@@ -318,24 +399,18 @@ public class AddBookActivity extends AppCompatActivity {
         if (lastDot > 0) {
             String ext = fileUrl.substring(lastDot + 1).toLowerCase();
             switch (ext) {
-                case "pdf": return "PDF";
                 case "epub": return "EPUB";
                 case "fb2": return "FB2";
                 case "txt": return "TXT";
-                // Обрабатываем случаи, когда расширение не входит в список допустимых
-                default: {
-                    Log.w(TAG, "Non-standard file extension detected: " + ext);
-                    // Для FB2.ZIP файлов
-                    if (ext.equals("zip") && fileUrl.toLowerCase().contains("fb2")) {
+                case "zip": 
+                    // Check if it's an FB2.ZIP file
+                    if (fileUrl.toLowerCase().contains("fb2")) {
                         return "FB2";
                     }
-                    // Возвращаем один из допустимых форматов, предпочтительно EPUB как наиболее распространенный
-                    return "EPUB";
-                }
+                    return "UNKNOWN";
+                default: return "UNKNOWN";
             }
         }
-        // Возвращаем допустимое значение по умолчанию вместо UNKNOWN
-        Log.w(TAG, "Could not determine file format from URL: " + fileUrl);
-        return "EPUB";
+        return "UNKNOWN";
     }
 }

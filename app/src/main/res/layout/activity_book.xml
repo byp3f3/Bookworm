@@ -157,8 +157,9 @@
                 android:minLines="3"
                 android:gravity="top"
                 android:inputType="textMultiLine"
-                android:background="@android:drawable/editbox_background"
+                android:background="@drawable/review_background"
                 android:padding="8dp"
+                android:textColor="?android:textColorPrimary"
                 android:layout_marginBottom="8dp"/>
 
             <Button

@@ -1,7 +1,13 @@
 package com.example.bookworm;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -13,22 +19,28 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.cardview.widget.CardView;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
 import com.bumptech.glide.Glide;
+import com.example.bookworm.services.BookMetadataReader;
 import com.example.bookworm.services.SupabaseService;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
 public class HomeFragment extends Fragment {
+    private static final String TAG = "HomeFragment";
     private LinearLayout currentlyReadingContainer;
     private LinearLayout emptyCurrentlyReadingContainer;
     private LinearLayout currentlyReadingList;
@@ -36,6 +48,10 @@ public class HomeFragment extends Fragment {
     private Button addBookEmptyButton;
     private ProgressBar loadingProgress;
     private SupabaseService supabaseService;
+    
+    private ActivityResultLauncher<Intent> filePickerLauncher;
+    private ActivityResultLauncher<String> permissionLauncher;
+    private ActivityResultLauncher<Intent> storagePermissionLauncher;
 
     @Nullable
     @Override
@@ -51,10 +67,98 @@ public class HomeFragment extends Fragment {
 
         supabaseService = new SupabaseService(requireContext());
 
-        addBookEmptyButton.setOnClickListener(v -> {
-            Intent intent = new Intent(getActivity(), AddBookDialogActivity.class);
-            startActivity(intent);
-        });
+        // Инициализация ланчера для запроса разрешений
+        permissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestPermission(),
+            isGranted -> {
+                if (isGranted) {
+                    openFilePicker();
+                } else {
+                    Toast.makeText(requireContext(), "Для работы с файлами необходимо разрешение", Toast.LENGTH_LONG).show();
+                }
+            }
+        );
+
+        // Инициализация ланчера для запроса разрешения на доступ ко всем файлам (Android 11+)
+        storagePermissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    if (Environment.isExternalStorageManager()) {
+                        openFilePicker();
+                    } else {
+                        Toast.makeText(requireContext(), "Для работы с файлами необходимо разрешение", Toast.LENGTH_LONG).show();
+                    }
+                }
+            }
+        );
+
+        // Инициализация ланчера для выбора файла
+        filePickerLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                Log.d(TAG, "File picker result received");
+                if (result.getResultCode() == android.app.Activity.RESULT_OK && result.getData() != null) {
+                    Uri uri = result.getData().getData();
+                    if (uri != null) {
+                        Log.d(TAG, "Selected file URI: " + uri.toString());
+                        
+                        // Получаем доступ на чтение файла
+                        try {
+                            final int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+                            requireActivity().getContentResolver().takePersistableUriPermission(uri, takeFlags);
+                            Log.d(TAG, "Successfully took persistable URI permission for: " + uri);
+                        } catch (SecurityException e) {
+                            Log.e(TAG, "Failed to take persistable URI permission: " + e.getMessage());
+                        }
+                        
+                        String mimeType = requireActivity().getContentResolver().getType(uri);
+                        Log.d(TAG, "File MIME type: " + mimeType);
+                        
+                        // Проверяем расширение файла, если MIME тип не определен
+                        String fileName = uri.getLastPathSegment();
+                        if (mimeType == null && fileName != null) {
+                            Log.d(TAG, "MIME type is null, checking extension of file: " + fileName);
+                            
+                            if (fileName.toLowerCase().endsWith(".fb2")) {
+                                mimeType = "application/x-fictionbook+xml";
+                            } else if (fileName.toLowerCase().endsWith(".epub")) {
+                                mimeType = "application/epub+zip";
+                            }
+                            Log.d(TAG, "Inferred MIME type from extension: " + mimeType);
+                        }
+
+                        if (isSupportedFileType(mimeType, fileName)) {
+                            // Читаем метаданные из файла
+                            readMetadataAndProceed(uri);
+                        } else {
+                            // Более детальное сообщение об ошибке
+                            StringBuilder message = new StringBuilder("Неподдерживаемый формат файла");
+                            
+                            if (mimeType != null) {
+                                message.append(": ").append(mimeType);
+                            }
+                            
+                            if (fileName != null) {
+                                message.append("\nИмя файла: ").append(fileName);
+                            }
+                            
+                            message.append("\n\nПоддерживаются только FB2 и EPUB файлы");
+                            
+                            Log.w(TAG, message.toString());
+                            Toast.makeText(requireContext(), message.toString(), Toast.LENGTH_LONG).show();
+                        }
+                    } else {
+                        Log.e(TAG, "Selected URI is null");
+                        Toast.makeText(requireContext(), "Ошибка при выборе файла", Toast.LENGTH_SHORT).show();
+                    }
+                } else {
+                    Log.d(TAG, "File picker cancelled or failed");
+                }
+            }
+        );
+
+        addBookEmptyButton.setOnClickListener(v -> checkPermissionsAndOpenFilePicker());
 
         showAllButton.setOnClickListener(v -> {
             Intent intent = new Intent(getActivity(), BookActivity.class);
@@ -62,6 +166,141 @@ public class HomeFragment extends Fragment {
         });
 
         return view;
+    }
+
+    private void checkPermissionsAndOpenFilePicker() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+ (API 30+)
+            if (!Environment.isExternalStorageManager()) {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                Uri uri = Uri.fromParts("package", requireActivity().getPackageName(), null);
+                intent.setData(uri);
+                storagePermissionLauncher.launch(intent);
+            } else {
+                openFilePicker();
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            // Android 6-10 (API 23-29)
+            if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.READ_EXTERNAL_STORAGE) 
+                    != PackageManager.PERMISSION_GRANTED) {
+                permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE);
+            } else {
+                openFilePicker();
+            }
+        } else {
+            // Android 5 и ниже
+            openFilePicker();
+        }
+    }
+
+    private void openFilePicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        
+        // Use a more generic MIME type first to show all documents
+        intent.setType("*/*");
+        
+        // Add all possible FB2 and EPUB MIME types
+        String[] mimeTypes = {
+                "application/x-fictionbook+xml",  // Primary FB2 MIME
+                "text/x-fictionbook+xml",         // Alternative FB2 MIME
+                "application/fb2",                // Another alternative
+                "application/octet-stream",       // Generic binary format
+                "text/plain",                     // Try text/plain as some systems use this for FB2
+                "application/xml",                // FB2 is XML-based
+                "text/xml",                       // Another XML option
+                "application/epub+zip"            // EPUB format
+        };
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+        
+        // Add all possible flags
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        
+        filePickerLauncher.launch(intent);
+    }
+
+    private boolean isSupportedFileType(String mimeType, String fileName) {
+        if (mimeType != null) {
+            return mimeType.equals("application/x-fictionbook+xml") ||
+                   mimeType.equals("text/x-fictionbook+xml") ||
+                   mimeType.equals("application/fb2") ||
+                   mimeType.equals("application/epub+zip") ||
+                   mimeType.equals("application/octet-stream") ||
+                   mimeType.equals("text/plain") ||
+                   mimeType.equals("application/xml") ||
+                   mimeType.equals("text/xml");
+        }
+        
+        if (fileName != null) {
+            String lowerFileName = fileName.toLowerCase();
+            return lowerFileName.endsWith(".fb2") ||
+                   lowerFileName.endsWith(".epub") ||
+                   lowerFileName.endsWith(".fb2.zip");
+        }
+        
+        return false;
+    }
+
+    private void readMetadataAndProceed(Uri fileUri) {
+        Log.d(TAG, "Starting metadata reading for URI: " + fileUri);
+        String finalFileName = fileUri.getLastPathSegment();
+
+        BookMetadataReader.readMetadata(requireContext(), fileUri, new BookMetadataReader.MetadataCallback() {
+            @Override
+            public void onMetadataReady(Map<String, String> metadata) {
+                Log.d(TAG, "Metadata ready: " + metadata.toString());
+
+                // Ensure we have at least the filename as title
+                if (!metadata.containsKey("title")) {
+                    metadata.put("title", getFileNameWithoutExtension(finalFileName));
+                }
+
+                // Запускаем AddBookActivity с метаданными
+                Intent intent = new Intent(requireActivity(), AddBookActivity.class);
+                intent.putExtra("fileUri", fileUri.toString());
+
+                // Передаем метаданные
+                intent.putExtra("title", metadata.get("title"));
+                if (metadata.containsKey("author")) {
+                    intent.putExtra("author", metadata.get("author"));
+                }
+                if (metadata.containsKey("description")) {
+                    intent.putExtra("description", metadata.get("description"));
+                }
+                if (metadata.containsKey("pages")) {
+                    intent.putExtra("pages", metadata.get("pages"));
+                }
+                
+                // Передаем путь к извлеченной обложке, если есть
+                if (metadata.containsKey("coverPath")) {
+                    String coverPath = metadata.get("coverPath");
+                    Log.d(TAG, "Passing cover path to AddBookActivity: " + coverPath);
+                    intent.putExtra("coverPath", coverPath);
+                }
+
+                startActivity(intent);
+            }
+
+            @Override
+            public void onError(String error) {
+                Log.e(TAG, "Error reading metadata: " + error);
+
+                // Use filename as fallback title
+                Intent intent = new Intent(requireActivity(), AddBookActivity.class);
+                intent.putExtra("fileUri", fileUri.toString());
+                intent.putExtra("title", getFileNameWithoutExtension(finalFileName));
+                startActivity(intent);
+            }
+        });
+    }
+
+    private String getFileNameWithoutExtension(String fileName) {
+        if (fileName == null) return "Unknown";
+        int dotIndex = fileName.lastIndexOf(".");
+        return dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
     }
 
     @Override
@@ -181,8 +420,7 @@ public class HomeFragment extends Fragment {
         addProgressBar.setVisibility(View.GONE);
 
         addBookView.setOnClickListener(v -> {
-            Intent intent = new Intent(getActivity(), AddBookDialogActivity.class);
-            startActivity(intent);
+            checkPermissionsAndOpenFilePicker();
         });
 
         currentlyReadingList.addView(addBookView);

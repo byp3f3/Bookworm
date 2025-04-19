@@ -43,9 +43,16 @@ import android.text.TextWatcher;
 import android.text.Editable;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.content.SharedPreferences;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 
-public class BookReaderActivity extends AppCompatActivity {
+public class BookReaderActivity extends BaseActivity {
     private static final String TAG = "BookReaderActivity";
+    private static final String PREFS_NAME = "BookwormPrefs";
+    private static final String KEY_THEME = "theme";
     private WebView contentWebView;
     private LinearLayout topPanel;
     private LinearLayout bottomPanel;
@@ -116,6 +123,9 @@ public class BookReaderActivity extends AppCompatActivity {
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
         getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+        
+        // Apply theme to UI components
+        applyThemeToUI();
         
         // Initialize TOC components
         tocPanel = findViewById(R.id.tocPanel);
@@ -734,13 +744,37 @@ public class BookReaderActivity extends AppCompatActivity {
         // Calculate content padding
         int paddingDp = 8; // reduced from 16dp
         int paddingPx = (int) (paddingDp * getResources().getDisplayMetrics().density);
+        
+        // Get current theme
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String currentTheme = preferences.getString(KEY_THEME, "light");
+        
+        // Set theme colors based on preference
+        String backgroundColor = "#FFFFFF"; // Default light
+        String textColor = "#333333";
+        
+        switch (currentTheme) {
+            case "dark":
+                backgroundColor = "#1E1E1E";
+                textColor = "#E0E0E0";
+                break;
+            case "sepia":
+                backgroundColor = "#F5E6D3";
+                textColor = "#4A3C2C";
+                break;
+            case "light":
+            default:
+                backgroundColor = "#FFFFFF";
+                textColor = "#333333";
+                break;
+        }
 
         String htmlContent = "<html><head>" +
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=1\">" +
             "<style>" +
             "body { " +
             "   font-family: sans-serif; " +
-            "   font-size: 22px; " +  // Increased from 18px to 22px
+            "   font-size: 22px; " +
             "   line-height: 1.6; " +
             "   padding: " + paddingPx + "px; " +
             "   margin: 0; " +
@@ -748,21 +782,25 @@ public class BookReaderActivity extends AppCompatActivity {
             "   hyphens: auto; " +
             "   word-wrap: break-word; " +
             "   max-width: 100%; " +
+            "   background-color: " + backgroundColor + "; " +
+            "   color: " + textColor + "; " +
             "}" +
             "h1, h2, h3 { " +
             "   text-align: center; " +
             "   margin: 12px 0; " +
-            "   font-size: 26px; " +  // Increased from 22px to 26px
+            "   font-size: 26px; " +
+            "   color: " + textColor + "; " +
             "}" +
             "p { " +
             "   margin: 8px 0; " +
             "   text-align: justify; " +
             "   text-justify: inter-word; " +
             "   max-width: 100%; " +
-            "   font-size: 22px; " +  // Increased from 18px to 22px
+            "   font-size: 22px; " +
+            "   color: " + textColor + "; " +
             "}" +
             "img { max-width: 100%; height: auto; }" +
-            "span.highlight { background-color: yellow; }" +
+            "span.highlight { background-color: yellow; color: black; }" +
             "</style>" +
             "</head><body>" + content + "</body></html>";
 
@@ -992,10 +1030,22 @@ public class BookReaderActivity extends AppCompatActivity {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        if (item.getItemId() == android.R.id.home) {
+        int itemId = item.getItemId();
+        
+        if (itemId == android.R.id.home) {
             onBackPressed();
             return true;
+        } else if (itemId == R.id.theme_light) {
+            setTheme("light");
+            return true;
+        } else if (itemId == R.id.theme_dark) {
+            setTheme("dark");
+            return true;
+        } else if (itemId == R.id.theme_sepia) {
+            setTheme("sepia");
+            return true;
         }
+        
         return super.onOptionsItemSelected(item);
     }
 
@@ -1076,9 +1126,101 @@ public class BookReaderActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         
+        // Apply theme to UI components
+        applyThemeToUI();
+        
         // Проверяем, соответствует ли текущая страница сохраненной в базе
         if (bookId != null && currentPage > 0) {
             supabaseService.verifyAndUpdateBookData(bookId, currentPage);
+        }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.book_reader_menu, menu);
+        return true;
+    }
+
+    private void setTheme(String theme) {
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        preferences.edit()
+                .putString(KEY_THEME, theme)
+                .apply();
+        
+        applyBookTheme(theme);
+        recreate();
+    }
+    
+    private void applyBookTheme(String theme) {
+        // Apply theme to WebView content
+        if (contentWebView != null && pages != null && currentPage >= 0 && currentPage < pages.size()) {
+            showPage(currentPage);
+        }
+    }
+
+    private void applyThemeToUI() {
+        // Get current theme
+        String currentTheme = getCurrentTheme();
+        
+        // Apply theme to UI components
+        int backgroundColor, textColor;
+        
+        switch (currentTheme) {
+            case "dark":
+                backgroundColor = getResources().getColor(R.color.dark_background);
+                textColor = getResources().getColor(R.color.dark_text);
+                break;
+            case "sepia":
+                backgroundColor = getResources().getColor(R.color.sepia_background);
+                textColor = getResources().getColor(R.color.sepia_text);
+                break;
+            case "light":
+            default:
+                backgroundColor = getResources().getColor(R.color.light_background);
+                textColor = getResources().getColor(R.color.light_text);
+                break;
+        }
+        
+        // Apply colors to WebView background
+        if (contentWebView != null) {
+            contentWebView.setBackgroundColor(backgroundColor);
+        }
+        
+        // Apply colors to panels - add null checks
+        if (topPanel != null) {
+            topPanel.setBackgroundColor(backgroundColor);
+        }
+        if (bottomPanel != null) {
+            bottomPanel.setBackgroundColor(backgroundColor);
+        }
+        if (tocPanel != null) {
+            tocPanel.setBackgroundColor(backgroundColor);
+        }
+        if (searchPanel != null) {
+            searchPanel.setBackgroundColor(backgroundColor);
+        }
+        
+        // Apply colors to text views - add null checks
+        if (titleText != null) {
+            titleText.setTextColor(textColor);
+        }
+        if (pageIndicator != null) {
+            pageIndicator.setTextColor(textColor);
+        }
+        if (searchResultsCount != null) {
+            searchResultsCount.setTextColor(textColor);
+        }
+        
+        // Apply toolbar background
+        Toolbar toolbar = findViewById(R.id.toolbar);
+        if (toolbar != null) {
+            toolbar.setBackgroundColor(backgroundColor);
+        }
+        
+        // Apply to other UI components as needed
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().setBackgroundDrawable(new ColorDrawable(backgroundColor));
         }
     }
 }

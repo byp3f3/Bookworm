@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    
+    <item
+        android:id="@+id/menu_theme"
+        android:title="Тема"
+        android:icon="@android:drawable/ic_menu_preferences"
+        app:showAsAction="ifRoom">
+        <menu>
+            <item
+                android:id="@+id/theme_light"
+                android:title="Светлая" />
+            <item
+                android:id="@+id/theme_dark"
+                android:title="Тёмная" />
+            <item
+                android:id="@+id/theme_sepia"
+                android:title="Сепия" />
+        </menu>
+    </item>
+</menu> 

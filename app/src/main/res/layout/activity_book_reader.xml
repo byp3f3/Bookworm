@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root_container"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
@@ -8,7 +9,8 @@
         android:id="@+id/contentWebView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@color/white" />
+        android:background="@color/white"
+        />
 
     <LinearLayout
         android:id="@+id/topPanel"
@@ -40,15 +42,6 @@
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:textAppearance="?attr/textAppearanceHeadline6" />
-
-                <ImageButton
-                    android:id="@+id/btnSearch"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_gravity="center_vertical"
-                    android:background="?attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="Поиск по тексту"
-                    android:src="@android:drawable/ic_menu_search" />
 
                 <ImageButton
                     android:id="@+id/btnToc"
@@ -174,6 +167,7 @@
             android:padding="8dp">
 
             <TextView
+                android:id="@+id/tocTitle"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -188,6 +182,32 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Закрыть оглавление"
                 android:src="@android:drawable/ic_menu_close_clear_cancel" />
+        </LinearLayout>
+
+        <!-- Tabs для переключения между содержанием и цитатами -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:background="#F5F5F5">
+
+            <Button
+                android:id="@+id/btnChaptersTab"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="?attr/selectableItemBackground"
+                android:text="Содержание"
+                android:textColor="#000000" />
+
+            <Button
+                android:id="@+id/btnQuotesTab"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="?attr/selectableItemBackground"
+                android:text="Цитаты"
+                android:textColor="#777777" />
         </LinearLayout>
 
         <FrameLayout
@@ -208,6 +228,40 @@
                 android:layout_gravity="center"
                 android:visibility="gone" />
         </FrameLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/quotePanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:visibility="gone"
+        android:layout_alignParentBottom="true"
+        android:layout_marginBottom="16dp">
+
+        <ImageButton
+            android:id="@+id/btnCopyQuote"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Копировать"/>
+
+        <ImageButton
+            android:id="@+id/btnSaveQuote"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Сохранить цитату"
+            android:layout_marginStart="8dp"/>
+
+        <ImageButton
+            android:id="@+id/btnCancelQuote"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Отмена"
+            android:layout_marginStart="8dp"/>
     </LinearLayout>
 
     <ProgressBar

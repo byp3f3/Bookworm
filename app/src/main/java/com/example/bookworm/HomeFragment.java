@@ -3,6 +3,7 @@ package com.example.bookworm;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -26,13 +27,28 @@ import androidx.annotation.Nullable;
 import androidx.cardview.widget.CardView;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+import androidx.viewpager2.widget.ViewPager2;
 
 import com.bumptech.glide.Glide;
 import com.example.bookworm.services.BookMetadataReader;
 import com.example.bookworm.services.SupabaseService;
+import com.github.mikephil.charting.charts.BarChart;
+import com.github.mikephil.charting.components.Description;
+import com.github.mikephil.charting.components.XAxis;
+import com.github.mikephil.charting.components.YAxis;
+import com.github.mikephil.charting.data.BarData;
+import com.github.mikephil.charting.data.BarDataSet;
+import com.github.mikephil.charting.data.BarEntry;
+import com.github.mikephil.charting.data.Entry;
+import com.github.mikephil.charting.formatter.IndexAxisValueFormatter;
+import com.github.mikephil.charting.highlight.Highlight;
+import com.github.mikephil.charting.listener.OnChartValueSelectedListener;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,10 +64,17 @@ public class HomeFragment extends Fragment {
     private Button addBookEmptyButton;
     private ProgressBar loadingProgress;
     private SupabaseService supabaseService;
+    private TextView yearlyStatsText;
+    private ViewPager2 chartViewPager;
+    private LinearLayout yearIndicatorContainer;
     
     private ActivityResultLauncher<Intent> filePickerLauncher;
     private ActivityResultLauncher<String> permissionLauncher;
     private ActivityResultLauncher<Intent> storagePermissionLauncher;
+    
+    private List<Integer> availableYears = new ArrayList<>();
+    private int currentYearIndex = 0;
+    private ChartPagerAdapter chartPagerAdapter;
 
     @Nullable
     @Override
@@ -64,6 +87,9 @@ public class HomeFragment extends Fragment {
         showAllButton = view.findViewById(R.id.showAllButton);
         addBookEmptyButton = view.findViewById(R.id.addBookEmptyButton);
         loadingProgress = view.findViewById(R.id.loadingProgress);
+        yearlyStatsText = view.findViewById(R.id.yearlyStatsText);
+        chartViewPager = view.findViewById(R.id.chartViewPager);
+        yearIndicatorContainer = view.findViewById(R.id.yearIndicatorContainer);
 
         supabaseService = new SupabaseService(requireContext());
 
@@ -164,6 +190,9 @@ public class HomeFragment extends Fragment {
             Intent intent = new Intent(getActivity(), BookActivity.class);
             startActivity(intent);
         });
+
+        // Load statistics data
+        loadStatisticsData();
 
         return view;
     }
@@ -306,10 +335,11 @@ public class HomeFragment extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
-        loadCurrentlyReadingBooks();
+        loadBooks();
+        loadStatisticsData(); // Обновляем статистику при возвращении к фрагменту
     }
 
-    private void loadCurrentlyReadingBooks() {
+    private void loadBooks() {
         loadingProgress.setVisibility(View.VISIBLE);
         currentlyReadingContainer.setVisibility(View.GONE);
         emptyCurrentlyReadingContainer.setVisibility(View.GONE);
@@ -397,6 +427,12 @@ public class HomeFragment extends Fragment {
                 intent.putExtra("endDate", book.getEndDate());
                 intent.putExtra("rating", book.getRating());
                 intent.putExtra("review", book.getReview());
+                
+                // Добавляем передачу пути к файлу
+                intent.putExtra("filePath", book.getFilePath());
+                intent.putExtra("file_url", book.getFilePath());
+                intent.putExtra("fileFormat", book.getFileFormat());
+                
                 startActivity(intent);
             });
 
@@ -486,4 +522,210 @@ public class HomeFragment extends Fragment {
             default: return "дней";
         }
     }
+
+    private void loadStatisticsData() {
+        // Показываем индикатор загрузки для статистики
+        if (yearlyStatsText != null) {
+            yearlyStatsText.setText("Загрузка статистики...");
+        }
+        
+        // Получаем все книги пользователя из Supabase и фильтруем по статусу "Прочитано"
+        supabaseService.getAllUserBooks(new SupabaseService.BooksLoadCallback() {
+            @Override
+            public void onSuccess(List<Book> allBooks) {
+                // Фильтруем книги со статусом "Прочитано"
+                List<Book> finishedBooks = new ArrayList<>();
+                for (Book book : allBooks) {
+                    if ("Прочитано".equals(book.getStatus())) {
+                        finishedBooks.add(book);
+                    }
+                }
+                
+                Log.d(TAG, "Found " + finishedBooks.size() + " books with 'Прочитано' status from Supabase");
+                
+                // Создаем список доступных годов
+                availableYears.clear();
+                Map<Integer, Map<Integer, Integer>> yearMonthBookCountMap = new HashMap<>();
+                int currentYear = Calendar.getInstance().get(Calendar.YEAR);
+                
+                // Убедимся, что текущий год всегда доступен
+                availableYears.add(currentYear);
+                yearMonthBookCountMap.put(currentYear, new HashMap<>());
+                
+                // Инициализируем счетчики для всех месяцев текущего года
+                for (int i = 1; i <= 12; i++) {
+                    yearMonthBookCountMap.get(currentYear).put(i, 0);
+                }
+                
+                // Обрабатываем книги
+                SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
+                
+                for (Book book : finishedBooks) {
+                    if (book.getEndDate() != null && !book.getEndDate().isEmpty()) {
+                        try {
+                            String endDateStr = book.getEndDate();
+                            Log.d(TAG, "Processing book with end date: " + endDateStr + ", title: " + book.getTitle());
+                            
+                            // Check if date has 'T' format from Supabase
+                            if (endDateStr.contains("T")) {
+                                endDateStr = endDateStr.split("T")[0];
+                            }
+                            
+                            Date finishDate = dateFormat.parse(endDateStr);
+                            if (finishDate != null) {
+                                Calendar cal = Calendar.getInstance();
+                                cal.setTime(finishDate);
+                                int year = cal.get(Calendar.YEAR);
+                                int month = cal.get(Calendar.MONTH) + 1; // Calendar.MONTH начинается с 0
+                                
+                                Log.d(TAG, "Book finished in year: " + year + ", month: " + month + ", title: " + book.getTitle());
+                                
+                                // Добавляем год в доступные, если его еще нет
+                                if (!availableYears.contains(year)) {
+                                    availableYears.add(year);
+                                    yearMonthBookCountMap.put(year, new HashMap<>());
+                                    // Инициализируем счетчики для всех месяцев
+                                    for (int i = 1; i <= 12; i++) {
+                                        yearMonthBookCountMap.get(year).put(i, 0);
+                                    }
+                                }
+                                
+                                // Увеличиваем счетчик для соответствующего месяца и года
+                                Map<Integer, Integer> monthCounts = yearMonthBookCountMap.get(year);
+                                int currentCount = monthCounts.getOrDefault(month, 0);
+                                monthCounts.put(month, currentCount + 1);
+                                Log.d(TAG, "Updated count for " + year + "-" + month + " is now: " + monthCounts.get(month));
+                            }
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error parsing date: " + book.getEndDate() + " for book: " + book.getTitle(), e);
+                        }
+                    } else {
+                        Log.d(TAG, "Book has no end date: " + book.getTitle());
+                    }
+                }
+                
+                // Сортируем годы по убыванию
+                java.util.Collections.sort(availableYears, (a, b) -> b - a);
+                
+                // Если доступных годов нет, добавляем текущий
+                if (availableYears.isEmpty()) {
+                    availableYears.add(currentYear);
+                    yearMonthBookCountMap.put(currentYear, new HashMap<>());
+                    for (int i = 1; i <= 12; i++) {
+                        yearMonthBookCountMap.get(currentYear).put(i, 0);
+                    }
+                }
+                
+                // Вывод отладочной информации о количестве книг по годам и месяцам
+                for (int year : availableYears) {
+                    Map<Integer, Integer> monthCounts = yearMonthBookCountMap.get(year);
+                    int totalForYear = 0;
+                    for (int month = 1; month <= 12; month++) {
+                        int count = monthCounts.getOrDefault(month, 0);
+                        if (count > 0) {
+                            Log.d(TAG, "Stats for " + year + "-" + month + ": " + count + " books");
+                            totalForYear += count;
+                        }
+                    }
+                    Log.d(TAG, "Total for year " + year + ": " + totalForYear + " books");
+                }
+                
+                // Обновляем UI в главном потоке
+                requireActivity().runOnUiThread(() -> {
+                    // Создаем и настраиваем адаптер для ViewPager
+                    chartPagerAdapter = new ChartPagerAdapter(requireContext(), availableYears, yearMonthBookCountMap);
+                    chartViewPager.setAdapter(chartPagerAdapter);
+                    
+                    // Устанавливаем текущий год
+                    currentYearIndex = 0; // Всегда начинаем с самого последнего года (первого в списке)
+                    updateYearIndicators();
+                    
+                    // Обрабатываем переключение годов
+                    chartViewPager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
+                        @Override
+                        public void onPageSelected(int position) {
+                            super.onPageSelected(position);
+                            currentYearIndex = position;
+                            updateYearIndicators();
+                            updateYearlyStatsText(availableYears.get(position), yearMonthBookCountMap.get(availableYears.get(position)));
+                        }
+                    });
+                    
+                    // Обновляем текст с годовой статистикой для текущего года
+                    if (!availableYears.isEmpty()) {
+                        updateYearlyStatsText(availableYears.get(0), yearMonthBookCountMap.get(availableYears.get(0)));
+                    }
+                });
+            }
+            
+            @Override
+            public void onError(String error) {
+                Log.e(TAG, "Error loading books from Supabase: " + error);
+                requireActivity().runOnUiThread(() -> {
+                    if (yearlyStatsText != null) {
+                        yearlyStatsText.setText("Ошибка загрузки статистики");
+                    }
+                    Toast.makeText(requireContext(), "Ошибка загрузки статистики: " + error, Toast.LENGTH_SHORT).show();
+                });
+            }
+        });
+    }
+    
+    private void updateYearIndicators() {
+        yearIndicatorContainer.removeAllViews();
+        
+        for (int i = 0; i < availableYears.size(); i++) {
+            View indicator = new View(requireContext());
+            int size = getResources().getDimensionPixelSize(R.dimen.indicator_size);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
+            params.setMargins(8, 0, 8, 0);
+            indicator.setLayoutParams(params);
+            
+            if (i == currentYearIndex) {
+                indicator.setBackgroundResource(R.drawable.indicator_active);
+            } else {
+                indicator.setBackgroundResource(R.drawable.indicator_inactive);
+            }
+            
+            final int year = availableYears.get(i);
+            indicator.setOnClickListener(v -> {
+                chartViewPager.setCurrentItem(availableYears.indexOf(year));
+            });
+            
+            yearIndicatorContainer.addView(indicator);
+        }
+    }
+    
+    private void updateYearlyStatsText(int year, Map<Integer, Integer> monthCountMap) {
+        if (!monthCountMap.isEmpty()) {
+            StringBuilder statsText = new StringBuilder();
+            
+            // Calculate total books for the year
+            int totalBooks = 0;
+            for (int count : monthCountMap.values()) {
+                totalBooks += count;
+            }
+            
+            // Use proper Russian grammar for book count
+            String bookCountText = getBooksCountString(totalBooks);
+            statsText.append(year).append(": всего прочитано ").append(totalBooks).append(" ").append(bookCountText).append("\n");
+            
+            yearlyStatsText.setText(statsText.toString().trim());
+        } else {
+            yearlyStatsText.setText(year + ": нет данных о прочитанных книгах");
+        }
+    }
+    
+    private String getBooksCountString(int count) {
+        if (count % 10 == 1 && count % 100 != 11) {
+            return "книгу";
+        } else if ((count % 10 == 2 || count % 10 == 3 || count % 10 == 4) && 
+                  (count % 100 != 12 && count % 100 != 13 && count % 100 != 14)) {
+            return "книги";
+        } else {
+            return "книг";
+        }
+    }
+
 }
+

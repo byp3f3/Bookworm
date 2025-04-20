@@ -81,6 +81,46 @@
             android:layout_gravity="center"
             android:layout_marginTop="32dp"
             android:visibility="gone"/>
+            
+        <!-- Статистика прочитанных книг -->
+        <LinearLayout
+            android:id="@+id/statisticsContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="24dp">
+            
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Статистика прочитанных книг"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="12dp"/>
+                
+            <TextView
+                android:id="@+id/yearlyStatsText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Годовая статистика"
+                android:textSize="16sp"
+                android:layout_marginBottom="16dp"/>
+            
+            <androidx.viewpager2.widget.ViewPager2
+                android:id="@+id/chartViewPager"
+                android:layout_width="match_parent"
+                android:layout_height="300dp"
+                android:layout_marginTop="8dp"/>
+                
+            <LinearLayout
+                android:id="@+id/yearIndicatorContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:layout_marginTop="8dp"/>
+        </LinearLayout>
+        
         <!-- Other sections can be added here -->
     </LinearLayout>
 </ScrollView>

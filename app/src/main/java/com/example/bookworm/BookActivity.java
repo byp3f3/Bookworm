@@ -36,6 +36,17 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.FileOutputStream;
 import org.json.JSONArray;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.app.Dialog;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import java.util.List;
+import java.util.ArrayList;
+import com.example.bookworm.adapters.ShelfSelectionAdapter;
+import com.example.bookworm.models.Shelf;
+import com.example.bookworm.services.SupabaseService;
+import com.example.bookworm.SupabaseAuth;
 
 public class BookActivity extends BaseActivity {
     private static final String TAG = "BookActivity";
@@ -50,13 +61,23 @@ public class BookActivity extends BaseActivity {
     private static final String SUPABASE_URL = "https://mfszyfmtujztqrjweixz.supabase.co";
     private static final String SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mc3p5Zm10dWp6dHFyandlaXh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE1OTkzNDAsImV4cCI6MjA1NzE3NTM0MH0.3URDTNl5T0R_TyWn6L0NlEFuLYoiH2qcQdYVNovFtVw";
     private static final String SUPABASE_TABLE = "books";
+    private SupabaseService supabaseService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_book);
 
-        // Get book data from intent
+        // Initialize Supabase service
+        supabaseService = new SupabaseService(this);
+
+        // Настраиваем toolbar
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+        getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+        getSupportActionBar().setTitle(getIntent().getStringExtra("title"));
+
+        // Get data from intent
         bookId = getIntent().getStringExtra("id");
         String bookTitle = getIntent().getStringExtra("title");
         String bookAuthor = getIntent().getStringExtra("author");
@@ -71,15 +92,9 @@ public class BookActivity extends BaseActivity {
         int rating = getIntent().getIntExtra("rating", 0);
         String review = getIntent().getStringExtra("review");
 
-        // If review is not in intent, load it from database
-        if (review == null && bookId != null) {
-            DatabaseHelper dbHelper = new DatabaseHelper(this);
-            String dbReview = dbHelper.getBookReview(bookId);
-            if (dbReview != null) {
-                getIntent().putExtra("review", dbReview);
-                review = dbReview;
-            }
-            dbHelper.close();
+        // Always load details from Supabase to ensure we have the latest data
+        if (bookId != null) {
+            loadBookDetailsFromSupabase();
         }
 
         // Initialize views
@@ -137,7 +152,7 @@ public class BookActivity extends BaseActivity {
 
         // Load review from Supabase
         if (bookId != null) {
-            loadReviewFromSupabase();
+            loadBookDetailsFromSupabase();
         }
 
         // Setup click listeners
@@ -161,6 +176,19 @@ public class BookActivity extends BaseActivity {
             intent.putExtra("startDate", getIntent().getStringExtra("startDate"));
             intent.putExtra("endDate", getIntent().getStringExtra("endDate"));
             intent.putExtra("coverPath", getIntent().getStringExtra("coverPath"));
+            intent.putExtra("filePath", getIntent().getStringExtra("filePath"));
+            intent.putExtra("fileFormat", getIntent().getStringExtra("fileFormat"));
+            
+            // Pass file_url as filePath if it exists
+            String fileUrl = getIntent().getStringExtra("file_url");
+            if (fileUrl != null) {
+                intent.putExtra("file_url", fileUrl);
+                // Also ensure filePath is set if it's null
+                if (getIntent().getStringExtra("filePath") == null) {
+                    intent.putExtra("filePath", fileUrl);
+                }
+            }
+            
             startActivityForResult(intent, 1);
         });
         deleteBookButton.setOnClickListener(v -> showDeleteConfirmationDialog());
@@ -178,11 +206,8 @@ public class BookActivity extends BaseActivity {
                     progressView.setText(String.format("Прочитано %d из %d страниц (%d%%)",
                             progress, totalPages, totalPages > 0 ? (progress * 100 / totalPages) : 0));
                     
-                    // Check if book is finished
-                    if (progress >= totalPages && totalPages > 0) {
-                        // Book is finished, update status to "Прочитано"
-                        updateBookStatus("Прочитано");
-                    }
+                    // Check if book is finished - but don't update status here, do it in onStopTrackingTouch
+                    // to avoid premature status changes while dragging the seekbar
                 }
             }
             
@@ -196,6 +221,8 @@ public class BookActivity extends BaseActivity {
                 // Update progress in database and sync with Supabase
                 int newPage = seekBar.getProgress();
                 updateReadingProgress(newPage);
+                
+                // The status change will be handled in updateReadingProgress if needed
             }
         });
         
@@ -221,85 +248,78 @@ public class BookActivity extends BaseActivity {
         });
     }
 
-    private void loadReviewFromSupabase() {
-        new Thread(() -> {
-            try {
-                // Construct the URL with the correct endpoint
-                URL url = new URL(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?id=eq." + bookId);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                
-                // Set request method and headers
-                conn.setRequestMethod("GET");
-                conn.setRequestProperty("apikey", SUPABASE_KEY);
-                conn.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
-                conn.setRequestProperty("Content-Type", "application/json");
-                
-                // Get response
-                int responseCode = conn.getResponseCode();
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    // Read response
-                    java.io.BufferedReader br = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(conn.getInputStream(), "utf-8"));
-                    StringBuilder response = new StringBuilder();
-                    String responseLine;
-                    while ((responseLine = br.readLine()) != null) {
-                        response.append(responseLine.trim());
-                    }
-                    
-                    // Parse JSON response
-                    org.json.JSONArray jsonArray = new org.json.JSONArray(response.toString());
-                    if (jsonArray.length() > 0) {
-                        org.json.JSONObject bookData = jsonArray.getJSONObject(0);
-                        if (bookData.has("review") && !bookData.isNull("review")) {
-                            final String supabaseReview = bookData.getString("review");
-                            
-                            // Update UI on main thread
-                            runOnUiThread(() -> {
+    private void loadBookDetailsFromSupabase() {
+        supabaseService.getBookById(bookId, new SupabaseService.BookCallback() {
+            @Override
+            public void onSuccess(Book book) {
+                if (book != null) {
+                    // Update review if available
+                    if (book.getReview() != null && !book.getReview().isEmpty()) {
+                        final String supabaseReview = book.getReview();
+                        
                                 // Update intent
                                 getIntent().putExtra("review", supabaseReview);
                                 
                                 // Update EditText
                                 EditText reviewView = findViewById(R.id.bookReview);
-                                if (supabaseReview != null && !supabaseReview.isEmpty()) {
                                     reviewView.setText(supabaseReview);
-                                    reviewView.setVisibility(View.VISIBLE);
-                                }
-                                
-                                // Save to local database
-                                DatabaseHelper dbHelper = new DatabaseHelper(BookActivity.this);
-                                dbHelper.updateBookReview(bookId, supabaseReview);
-                                dbHelper.close();
-                            });
-                        }
+                        Log.d(TAG, "Loaded review from Supabase: " + supabaseReview);
                     }
+                    
+                    // Update rating
+                    int rating = book.getRating();
+                    if (rating > 0) {
+                        RatingBar ratingBar = findViewById(R.id.ratingBar);
+                        ratingBar.setRating(rating);
+                        getIntent().putExtra("rating", rating);
+                        Log.d(TAG, "Loaded rating from Supabase: " + rating);
+                    }
+                    
+                    // Refresh UI based on new data
+                    updateSectionsVisibility();
                 }
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to load review from Supabase: " + e.getMessage());
             }
-        }).start();
+            
+            @Override
+            public void onError(String error) {
+                Log.e(TAG, "Failed to load book details from Supabase: " + error);
+            }
+        });
     }
 
     private void updateReadingProgress(int newPage) {
-        // Update progress in database
-        DatabaseHelper dbHelper = new DatabaseHelper(this);
-        dbHelper.updateBookProgress(bookId, newPage);
-        dbHelper.close();
+        currentPage = newPage;
 
         // Update UI
-        currentPage = newPage;
+        progressBar.setProgress(currentPage);
         progressView.setText(String.format("Прочитано %d из %d страниц (%d%%)",
                 currentPage, totalPages, totalPages > 0 ? (currentPage * 100 / totalPages) : 0));
-        progressBar.setProgress(currentPage);
-        progressUpdateSection.setVisibility(View.GONE);
+        
+        // Save to Supabase
+        supabaseService.updateBookProgress(bookId, currentPage, new SupabaseService.BookProgressCallback() {
+            @Override
+            public void onSuccess() {
+                Toast.makeText(BookActivity.this, "Прогресс чтения обновлен", Toast.LENGTH_SHORT).show();
+                
+                // Update intent data
+                getIntent().putExtra("currentPage", currentPage);
 
         // Check if book is finished
-        if (currentPage >= totalPages && totalPages > 0 && "Читаю".equals(readingStatus)) {
-            // Book is finished, update status to "Прочитано"
-            updateBookStatus("Прочитано");
-        }
-
-        // Sync with Supabase
-        syncReadingProgress();
+                if (currentPage >= totalPages && totalPages > 0) {
+                    Log.d(TAG, "Book is completed - setting status to 'Прочитано'");
+                    // Book is finished, update status to "Прочитано" regardless of current status
+                    if (!"Прочитано".equals(readingStatus)) {
+                        readingStatus = "Прочитано";
+                        updateBookStatus(readingStatus);
+                    }
+                }
+            }
+            
+            @Override
+            public void onError(String error) {
+                Toast.makeText(BookActivity.this, "Ошибка обновления прогресса: " + error, Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     private void syncReadingProgress() {
@@ -368,16 +388,25 @@ public class BookActivity extends BaseActivity {
         super.onPause();
         // Save current reading position when leaving the activity
         if ("Читаю".equals(readingStatus)) {
-            DatabaseHelper dbHelper = new DatabaseHelper(this);
-            dbHelper.updateBookProgress(bookId, currentPage);
-            dbHelper.close();
-            syncReadingProgress();
+            // Update progress in Supabase
+            supabaseService.updateBookProgress(bookId, currentPage, new SupabaseService.BookProgressCallback() {
+                @Override
+                public void onSuccess() {
+                    Log.d(TAG, "Reading progress updated in onPause");
+                }
+                
+                @Override
+                public void onError(String error) {
+                    Log.e(TAG, "Error updating reading progress in onPause: " + error);
+                }
+            });
         }
     }
 
     private void openBookContent(String bookTitle) {
         // Check if we have a local file path
         String localFilePath = getIntent().getStringExtra("filePath");
+        String fileUrl = getIntent().getStringExtra("file_url");
 
         if (localFilePath != null && !localFilePath.isEmpty()) {
             // We have a local file, open it directly
@@ -427,50 +456,62 @@ public class BookActivity extends BaseActivity {
                     
                     // Parse the JSON response to get the file URL
                     JSONArray jsonArray = new JSONArray(response.toString());
+                    String fileUrlFromApi = null;
                     if (jsonArray.length() > 0) {
                         JSONObject book = jsonArray.getJSONObject(0);
-                        String fileUrl = book.getString("file_url");
-                        
-                        if (fileUrl != null && !fileUrl.isEmpty()) {
-                            // Download the file from the URL
-                            URL fileDownloadUrl = new URL(fileUrl);
-                            connection = (HttpURLConnection) fileDownloadUrl.openConnection();
-                            
-                            // Create a temporary file to store the download
-                            File tempDir = new File(getFilesDir(), "books");
-                            if (!tempDir.exists()) {
-                                tempDir.mkdirs();
-                            }
-                            
-                            File tempFile = new File(tempDir, bookId + ".book");
-                            
-                            if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                                try (InputStream inputStream = connection.getInputStream();
-                                     FileOutputStream outputStream = new FileOutputStream(tempFile)) {
-                                    byte[] buffer = new byte[4096];
-                                    int bytesRead;
-                                    while ((bytesRead = inputStream.read(buffer)) != -1) {
-                                        outputStream.write(buffer, 0, bytesRead);
-                                    }
-                                }
-                                
-                                // Update the file path in the intent
-                                getIntent().putExtra("filePath", tempFile.getAbsolutePath());
-                                
-                                // Open the book reader with the downloaded file
-                                runOnUiThread(() -> {
-                                    progressBar.setVisibility(ProgressBar.GONE);
-                                    Intent intent = new Intent(this, BookReaderActivity.class);
-                                    intent.putExtra("title", bookTitle);
-                                    intent.putExtra("id", bookId);
-                                    intent.putExtra("currentPage", currentPage);
-                                    intent.putExtra("fileUri", Uri.fromFile(tempFile));
-                                    startActivity(intent);
-                                });
-                                return;
-                            }
+                        if (book.has("file_url") && !book.isNull("file_url")) {
+                            fileUrlFromApi = book.getString("file_url");
                         }
                     }
+                    
+                    if (fileUrlFromApi != null && !fileUrlFromApi.isEmpty()) {
+                        final String finalFileUrl = fileUrlFromApi;
+                        Log.d(TAG, "Found file URL from API: " + finalFileUrl);
+                        
+                        // Download the file from the URL
+                        URL fileDownloadUrl = new URL(finalFileUrl);
+                        connection = (HttpURLConnection) fileDownloadUrl.openConnection();
+                        
+                        // Create a temporary file to store the download
+                        File tempDir = new File(getFilesDir(), "books");
+                        if (!tempDir.exists()) {
+                            tempDir.mkdirs();
+                        }
+                        
+                        File tempFile = new File(tempDir, bookId + ".book");
+                        
+                        if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                            try (InputStream inputStream = connection.getInputStream();
+                                 FileOutputStream outputStream = new FileOutputStream(tempFile)) {
+                                byte[] buffer = new byte[4096];
+                                int bytesRead;
+                                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                                    outputStream.write(buffer, 0, bytesRead);
+                                }
+                            }
+                            
+                            // Update the file path in the intent
+                            getIntent().putExtra("filePath", tempFile.getAbsolutePath());
+                            
+                            // Open the book reader with the downloaded file
+                            runOnUiThread(() -> {
+                                progressBar.setVisibility(ProgressBar.GONE);
+                                Intent intent = new Intent(this, BookReaderActivity.class);
+                                intent.putExtra("title", bookTitle);
+                                intent.putExtra("id", bookId);
+                                intent.putExtra("currentPage", currentPage);
+                                intent.putExtra("fileUri", Uri.fromFile(tempFile));
+                                startActivity(intent);
+                            });
+                            return;
+                        } else {
+                            Log.e(TAG, "Failed to download file, response code: " + connection.getResponseCode());
+                        }
+                    } else {
+                        Log.e(TAG, "No file URL found in the API response");
+                    }
+                } else {
+                    Log.e(TAG, "Failed to fetch file URL, response code: " + connection.getResponseCode());
                 }
                 
                 // If we get here, something went wrong
@@ -519,36 +560,52 @@ public class BookActivity extends BaseActivity {
             bookId = data.getStringExtra("id");
             String newTitle = data.getStringExtra("title");
             String newAuthor = data.getStringExtra("author");
-            String newGenre = data.getStringExtra("genre");
-            readingStatus = data.getStringExtra("status");
-            currentPage = data.getIntExtra("currentPage", 0);
-            totalPages = data.getIntExtra("totalPages", 0);
+            String newStatus = data.getStringExtra("status");
+            int newCurrentPage = data.getIntExtra("currentPage", currentPage); // Use current value as fallback
+            int newTotalPages = data.getIntExtra("totalPages", totalPages); // Use current value as fallback
             String newStartDate = data.getStringExtra("startDate");
             String newEndDate = data.getStringExtra("endDate");
             String newCoverPath = data.getStringExtra("coverPath");
-            int newRating = data.getIntExtra("rating", 0);
+            int newRating = data.getIntExtra("rating", getIntent().getIntExtra("rating", 0));
             String newReview = data.getStringExtra("review");
+            String newFilePath = data.getStringExtra("filePath");
+            String newFileFormat = data.getStringExtra("fileFormat");
+            String newFileUrl = data.getStringExtra("file_url");
+            
+            // Update class fields
+            currentPage = newCurrentPage;
+            totalPages = newTotalPages;
+            readingStatus = newStatus;
 
-            // Store dates in the intent for future use
+            // Store values in the intent for future use
+            getIntent().putExtra("title", newTitle);
+            getIntent().putExtra("author", newAuthor);
+            getIntent().putExtra("status", newStatus);
+            getIntent().putExtra("currentPage", newCurrentPage);
+            getIntent().putExtra("totalPages", newTotalPages);
             getIntent().putExtra("startDate", newStartDate);
             getIntent().putExtra("endDate", newEndDate);
+            getIntent().putExtra("coverPath", newCoverPath);
             getIntent().putExtra("rating", newRating);
+            getIntent().putExtra("filePath", newFilePath);
+            getIntent().putExtra("fileFormat", newFileFormat);
+            getIntent().putExtra("file_url", newFileUrl);
+            
+            if (newReview != null) {
             getIntent().putExtra("review", newReview);
+            }
 
             // Update UI
             TextView titleView = findViewById(R.id.bookTitle);
             TextView authorView = findViewById(R.id.bookAuthor);
             ImageView bookCover = findViewById(R.id.bookCover);
             Spinner statusSpinner = findViewById(R.id.readingStatusSpinner);
-            TextView datesView = findViewById(R.id.readingDates);
-            TextView timeView = findViewById(R.id.totalReadingTime);
-            TextView daysView = findViewById(R.id.readingDays);
-            RatingBar ratingBar = findViewById(R.id.ratingBar);
-            EditText reviewView = findViewById(R.id.bookReview);
 
-            titleView.setText(newTitle);
-            authorView.setText(newAuthor);
+            // Update basic information
+            if (newTitle != null) titleView.setText(newTitle);
+            if (newAuthor != null) authorView.setText(newAuthor);
 
+            // Update cover image
             if (newCoverPath != null && !newCoverPath.isEmpty()) {
                 Glide.with(this)
                         .load(newCoverPath)
@@ -558,9 +615,17 @@ public class BookActivity extends BaseActivity {
             }
 
             // Update status spinner
+            if (newStatus != null) {
             ArrayAdapter<CharSequence> adapter = (ArrayAdapter<CharSequence>) statusSpinner.getAdapter();
-            int spinnerPosition = adapter.getPosition(readingStatus);
+                int spinnerPosition = adapter.getPosition(newStatus);
             statusSpinner.setSelection(spinnerPosition);
+            }
+
+            // Update progress bar
+            progressBar.setMax(newTotalPages);
+            progressBar.setProgress(newCurrentPage);
+            progressView.setText(String.format("Прочитано %d из %d страниц (%d%%)",
+                newCurrentPage, newTotalPages, newTotalPages > 0 ? (newCurrentPage * 100 / newTotalPages) : 0));
 
             // Update sections visibility based on new status
             updateSectionsVisibility();
@@ -590,6 +655,9 @@ public class BookActivity extends BaseActivity {
         String endDate = getIntent().getStringExtra("endDate");
         int rating = getIntent().getIntExtra("rating", 0);
         String review = getIntent().getStringExtra("review");
+
+        Log.d(TAG, "updateSectionsVisibility - Review from intent: " + (review != null ? review : "null"));
+        Log.d(TAG, "updateSectionsVisibility - Rating from intent: " + rating);
 
         // Initialize date formatters
         SimpleDateFormat dbDateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
@@ -653,11 +721,15 @@ public class BookActivity extends BaseActivity {
             
             // Show review
             reviewView.setVisibility(View.VISIBLE);
+            reviewView.clearFocus(); // Ensure edittext is not focused initially
+            
             if (review != null && !review.isEmpty()) {
                 reviewView.setText(review);
+                Log.d(TAG, "Setting review text to: " + review);
             } else {
                 reviewView.setText("");
                 reviewView.setHint("Напишите рецензию");
+                Log.d(TAG, "No review found, setting empty text");
             }
             
             // Setup review save button
@@ -696,329 +768,427 @@ public class BookActivity extends BaseActivity {
     }
 
     private void saveRating(int rating) {
-        // Save rating to database
-        DatabaseHelper dbHelper = new DatabaseHelper(this);
-        dbHelper.updateBookRating(bookId, rating);
-        dbHelper.close();
-        
-        // Update intent
+        supabaseService.saveBook(createUpdatedBookWithRating(rating), new SupabaseService.BookSaveCallback() {
+            @Override
+            public void onSuccess() {
+                Toast.makeText(BookActivity.this, "Рейтинг сохранен", Toast.LENGTH_SHORT).show();
         getIntent().putExtra("rating", rating);
-        
-        // Sync with Supabase
-        syncRatingAndReview(rating, getIntent().getStringExtra("review"));
-        
-        Toast.makeText(this, "Оценка сохранена", Toast.LENGTH_SHORT).show();
-    }
-    
-    private void showEditReviewDialog(String currentReview) {
-        // Create an EditText for the dialog
-        final EditText input = new EditText(this);
-        input.setHint("Напишите рецензию");
-        input.setLines(5);
-        input.setMaxLines(10);
-        
-        if (currentReview != null) {
-            input.setText(currentReview);
-        }
-        
-        new AlertDialog.Builder(this)
-                .setTitle("Рецензия на книгу")
-                .setView(input)
-                .setPositiveButton("Сохранить", (dialog, which) -> {
-                    String newReview = input.getText().toString().trim();
-                    saveReview(newReview);
-                })
-                .setNegativeButton("Отмена", null)
-                .show();
-    }
-    
-    private void saveReview(String review) {
-        // Save review to database
-        DatabaseHelper dbHelper = new DatabaseHelper(this);
-        dbHelper.updateBookReview(bookId, review);
-        dbHelper.close();
-        
-        // Update intent
-        getIntent().putExtra("review", review);
-        
-        // Update UI
-        EditText reviewView = findViewById(R.id.bookReview);
-        if (review != null && !review.isEmpty()) {
-            reviewView.setText(review);
-            reviewView.setVisibility(View.VISIBLE);
-        } else {
-            reviewView.setText("");
-            reviewView.setHint("Напишите рецензию");
-        }
-        
-        // Sync with Supabase
-        syncRatingAndReview(getIntent().getIntExtra("rating", 0), review);
-        
-        Toast.makeText(this, "Рецензия сохранена", Toast.LENGTH_SHORT).show();
-    }
-    
-    private void syncRatingAndReview(int rating, String review) {
-        if (bookId == null || bookId.isEmpty()) {
-            Log.e(TAG, "Invalid book ID: null or empty");
-            return;
-        }
-
-        new Thread(() -> {
-            try {
-                // Construct the URL with the correct endpoint
-                URL url = new URL(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?id=eq." + bookId);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                
-                // Set request method and headers
-                conn.setRequestMethod("PATCH");
-                conn.setRequestProperty("apikey", SUPABASE_KEY);
-                conn.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Prefer", "return=minimal");
-                conn.setDoOutput(true);
-
-                // Create JSON data
-                JSONObject data = new JSONObject();
-                data.put("rating", rating);
-                if (review != null) {
-                    data.put("review", review);
-                }
-                data.put("updated_at", new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
-                    .format(new java.util.Date()));
-
-                // Write data to connection
-                try (OutputStream os = conn.getOutputStream()) {
-                    byte[] input = data.toString().getBytes("utf-8");
-                    os.write(input, 0, input.length);
-                }
-
-                // Get response
-                int responseCode = conn.getResponseCode();
-                if (responseCode != HttpURLConnection.HTTP_OK && responseCode != HttpURLConnection.HTTP_NO_CONTENT) {
-                    throw new Exception("HTTP error code: " + responseCode);
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to sync rating/review with Supabase: " + e.getMessage());
             }
-        }).start();
+            
+            @Override
+            public void onError(String error) {
+                Toast.makeText(BookActivity.this, "Ошибка сохранения рейтинга: " + error, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+    
+    private Book createUpdatedBookWithRating(int rating) {
+        Book book = new Book();
+        book.setId(bookId);
+        book.setTitle(getIntent().getStringExtra("title"));
+        book.setAuthor(getIntent().getStringExtra("author"));
+        book.setStatus(readingStatus);
+        book.setCurrentPage(currentPage);
+        book.setTotalPages(totalPages);
+        book.setStartDate(getIntent().getStringExtra("startDate"));
+        book.setEndDate(getIntent().getStringExtra("endDate"));
+        book.setCoverPath(getIntent().getStringExtra("coverPath"));
+        book.setRating(rating);
+        book.setReview(getIntent().getStringExtra("review"));
+        
+        // Critical: preserve file information
+        String fileUrl = getIntent().getStringExtra("file_url");
+        String filePath = getIntent().getStringExtra("filePath");
+        String fileFormat = getIntent().getStringExtra("fileFormat");
+        
+        if (fileUrl != null && !fileUrl.isEmpty()) {
+            Log.d(TAG, "Rating saving - Setting file path from file_url: " + fileUrl);
+            book.setFilePath(fileUrl);
+        } else if (filePath != null && !filePath.isEmpty()) {
+            Log.d(TAG, "Rating saving - Setting file path: " + filePath);
+            book.setFilePath(filePath);
+        } else {
+            Log.e(TAG, "Rating saving - No file URL or path found for book");
+        }
+        
+        if (fileFormat != null) {
+            book.setFileFormat(fileFormat);
+        }
+        
+        return book;
+    }
+    
+    private Book createUpdatedBookWithReview(String review) {
+        Book book = new Book();
+        book.setId(bookId);
+        book.setTitle(getIntent().getStringExtra("title"));
+        book.setAuthor(getIntent().getStringExtra("author"));
+        book.setStatus(readingStatus);
+        book.setCurrentPage(currentPage);
+        book.setTotalPages(totalPages);
+        book.setStartDate(getIntent().getStringExtra("startDate"));
+        book.setEndDate(getIntent().getStringExtra("endDate"));
+        book.setCoverPath(getIntent().getStringExtra("coverPath"));
+        book.setRating(getIntent().getIntExtra("rating", 0));
+        book.setReview(review);
+        
+        // Critical: preserve file information
+        String fileUrl = getIntent().getStringExtra("file_url");
+        String filePath = getIntent().getStringExtra("filePath");
+        String fileFormat = getIntent().getStringExtra("fileFormat");
+        
+        if (fileUrl != null && !fileUrl.isEmpty()) {
+            Log.d(TAG, "Review saving - Setting file path from file_url: " + fileUrl);
+            book.setFilePath(fileUrl);
+        } else if (filePath != null && !filePath.isEmpty()) {
+            Log.d(TAG, "Review saving - Setting file path: " + filePath);
+            book.setFilePath(filePath);
+        } else {
+            Log.e(TAG, "Review saving - No file URL or path found for book");
+        }
+        
+        if (fileFormat != null) {
+            book.setFileFormat(fileFormat);
+        }
+        
+        return book;
+    }
+
+    private void saveReview(String review) {
+        supabaseService.saveBook(createUpdatedBookWithReview(review), new SupabaseService.BookSaveCallback() {
+            @Override
+            public void onSuccess() {
+                Toast.makeText(BookActivity.this, "Рецензия сохранена", Toast.LENGTH_SHORT).show();
+                getIntent().putExtra("review", review);
+            }
+            
+            @Override
+            public void onError(String error) {
+                Toast.makeText(BookActivity.this, "Ошибка сохранения рецензии: " + error, Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     private void showDeleteConfirmationDialog() {
-        new AlertDialog.Builder(this)
-                .setTitle("Удаление книги")
-                .setMessage("Вы уверены, что хотите удалить эту книгу из библиотеки?")
-                .setPositiveButton("Удалить", (dialog, which) -> {
-                    // Delete from Supabase
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        View view = getLayoutInflater().inflate(R.layout.dialog_delete_confirmation, null);
+        
+        TextView textViewDeleteTitle = view.findViewById(R.id.textViewDeleteTitle);
+        TextView textViewDeleteMessage = view.findViewById(R.id.textViewDeleteMessage);
+        Button buttonCancel = view.findViewById(R.id.buttonCancel);
+        Button buttonDelete = view.findViewById(R.id.buttonDelete);
+        
+        textViewDeleteTitle.setText("Удалить книгу");
+        textViewDeleteMessage.setText(String.format(
+                "Вы уверены, что хотите удалить книгу \"%s\"?",
+                getIntent().getStringExtra("title")));
+        
+        builder.setView(view);
+        AlertDialog dialog = builder.create();
+        
+        buttonCancel.setOnClickListener(v -> dialog.dismiss());
+        
+        buttonDelete.setOnClickListener(v -> {
+            dialog.dismiss();
                     deleteBookFromSupabase();
-                })
-                .setNegativeButton("Отмена", null)
-                .show();
+        });
+        
+        dialog.show();
     }
 
     private void deleteBookFromSupabase() {
-        if (bookId == null || bookId.isEmpty()) {
-            Log.e(TAG, "Cannot delete book: Invalid book ID");
-            Toast.makeText(this, "Ошибка: неверный идентификатор книги", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
+        // Show loading dialog
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setMessage("Удаление книги...");
+        builder.setCancelable(false);
+        AlertDialog loadingDialog = builder.create();
+        loadingDialog.show();
+        
+        // Delete the book from Supabase
         new Thread(() -> {
-            HttpURLConnection conn = null;
             try {
-                // Construct URL for the Supabase delete request
-                String encodedId = URLEncoder.encode(bookId, "UTF-8");
-                URL url = new URL(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?id=eq." + encodedId);
-                Log.d(TAG, "Deleting book from Supabase: " + url.toString());
+                // Construct the URL with the correct endpoint
+                URL url = new URL(SUPABASE_URL + "/rest/v1/books?id=eq." + bookId);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 
-                conn = (HttpURLConnection) url.openConnection();
+                // Set request method and headers
                 conn.setRequestMethod("DELETE");
                 conn.setRequestProperty("apikey", SUPABASE_KEY);
-                conn.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Prefer", "return=minimal");
+                conn.setRequestProperty("Authorization", "Bearer " + getSupabaseAuth().getAccessToken());
                 
+                // Get response
                 int responseCode = conn.getResponseCode();
-                Log.d(TAG, "Supabase delete response code: " + responseCode);
                 
-                if (responseCode >= 200 && responseCode < 300) {
                     runOnUiThread(() -> {
-                        Toast.makeText(BookActivity.this, "Книга успешно удалена", Toast.LENGTH_SHORT).show();
-                        
-                        // Set result and finish activity
-                        Intent resultIntent = new Intent();
-                        resultIntent.putExtra("BOOK_DELETED", true);
-                        resultIntent.putExtra("BOOK_ID", bookId);
-                        setResult(RESULT_OK, resultIntent);
-                        finish();
-                    });
-                    Log.d(TAG, "Book deleted from Supabase successfully");
+                    loadingDialog.dismiss();
+                    
+                    if (responseCode == HttpURLConnection.HTTP_OK || 
+                        responseCode == HttpURLConnection.HTTP_NO_CONTENT) {
+                        Toast.makeText(BookActivity.this, "Книга удалена", Toast.LENGTH_SHORT).show();
+                        finish(); // Close the activity
                 } else {
-                    // Read error response
-                    BufferedReader in = new BufferedReader(new InputStreamReader(conn.getErrorStream()));
-                    String inputLine;
-                    StringBuilder response = new StringBuilder();
-                    while ((inputLine = in.readLine()) != null) {
-                        response.append(inputLine);
+                        Toast.makeText(BookActivity.this, 
+                            "Ошибка удаления книги: код " + responseCode, 
+                            Toast.LENGTH_SHORT).show();
                     }
-                    in.close();
-                    
-                    final String errorMsg = response.toString();
-                    Log.e(TAG, "Error deleting book from Supabase: " + responseCode + " " + errorMsg);
-                    
-                    runOnUiThread(() -> 
-                        Toast.makeText(BookActivity.this, "Ошибка при удалении книги: " + responseCode, Toast.LENGTH_SHORT).show()
-                    );
-                }
+                });
             } catch (Exception e) {
-                Log.e(TAG, "Exception deleting book from Supabase", e);
-                runOnUiThread(() -> 
-                    Toast.makeText(BookActivity.this, "Ошибка: " + e.getMessage(), Toast.LENGTH_SHORT).show()
-                );
-            } finally {
-                if (conn != null) {
-                    conn.disconnect();
-                }
+                Log.e(TAG, "Failed to delete book: " + e.getMessage());
+                
+                runOnUiThread(() -> {
+                    loadingDialog.dismiss();
+                    Toast.makeText(BookActivity.this, 
+                        "Ошибка удаления книги: " + e.getMessage(), 
+                        Toast.LENGTH_SHORT).show();
+                });
             }
         }).start();
     }
 
     private void updateBookStatus(String newStatus) {
-        // Show confirmation dialog
-        new AlertDialog.Builder(this)
-                .setTitle("Изменение статуса")
-                .setMessage("Вы уверены, что хотите изменить статус книги на \"" + newStatus + "\"?")
-                .setPositiveButton("Да", (dialog, which) -> {
-                    // Update status in database
-                    DatabaseHelper dbHelper = new DatabaseHelper(this);
-                    
-                    // If changing to "Прочитано", set the end date to current date
-                    String endDate = null;
-                    if ("Прочитано".equals(newStatus)) {
-                        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
-                        endDate = dateFormat.format(new Date());
-                        getIntent().putExtra("endDate", endDate);
-                    }
-                    
-                    // Update the book with new status and end date
-                    dbHelper.updateBook(bookId, null, null, null, newStatus, -1, -1, null, endDate, null);
-                    dbHelper.close();
-                    
-                    // Update intent
-                    getIntent().putExtra("status", newStatus);
                     readingStatus = newStatus;
                     
-                    // Update UI
-                    Spinner statusSpinner = findViewById(R.id.readingStatusSpinner);
-                    ArrayAdapter<CharSequence> adapter = (ArrayAdapter<CharSequence>) statusSpinner.getAdapter();
-                    int spinnerPosition = adapter.getPosition(newStatus);
-                    statusSpinner.setSelection(spinnerPosition);
-                    
-                    // Update sections visibility based on new status
-                    updateSectionsVisibility();
-                    
-                    // Sync with Supabase
-                    syncBookStatus(newStatus, endDate);
-                    
-                    // Show success message
-                    Toast.makeText(this, "Статус книги изменен на \"" + newStatus + "\"", Toast.LENGTH_SHORT).show();
-                })
-                .setNegativeButton("Отмена", null)
-                .show();
+        // Update UI to reflect new status
+        ArrayAdapter<CharSequence> adapter = (ArrayAdapter<CharSequence>) 
+                ((Spinner) findViewById(R.id.readingStatusSpinner)).getAdapter();
+        int spinnerPosition = adapter.getPosition(readingStatus);
+        ((Spinner) findViewById(R.id.readingStatusSpinner)).setSelection(spinnerPosition);
+        
+        // Set dates based on status
+        SimpleDateFormat dbDateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
+        String currentDate = dbDateFormat.format(new Date());
+        
+        // Get current dates from intent
+        String startDate = getIntent().getStringExtra("startDate");
+        String endDate = getIntent().getStringExtra("endDate");
+        
+        // Always ensure we have valid dates based on the book status
+        if ("Читаю".equals(readingStatus)) {
+            // For "Читаю" status, we need a start date but no end date
+            if (startDate == null || startDate.isEmpty() || "null".equals(startDate)) {
+                startDate = currentDate;
+            }
+            // Clear end date for books being read
+            endDate = null;
+        } 
+        else if ("Прочитано".equals(readingStatus)) {
+            // For "Прочитано" status, we need both start and end date
+            if (startDate == null || startDate.isEmpty() || "null".equals(startDate)) {
+                startDate = currentDate;
+            }
+            if (endDate == null || endDate.isEmpty() || "null".equals(endDate)) {
+                endDate = currentDate;
+            }
+        }
+        else if ("В планах".equals(readingStatus)) {
+            // For planned books, dates are optional
+            // Keep existing dates if any
+        }
+        
+        // Save dates to intent for future reference
+        getIntent().putExtra("startDate", startDate);
+        if (endDate != null) {
+            getIntent().putExtra("endDate", endDate);
+        }
+        
+        // Update book in Supabase
+        Book book = new Book();
+        book.setId(bookId);
+        book.setTitle(getIntent().getStringExtra("title"));
+        book.setAuthor(getIntent().getStringExtra("author"));
+        book.setStatus(readingStatus);
+        book.setCurrentPage(currentPage);
+        book.setTotalPages(totalPages);
+        book.setStartDate(startDate);
+        book.setEndDate(endDate);
+        book.setCoverPath(getIntent().getStringExtra("coverPath"));
+        book.setRating(getIntent().getIntExtra("rating", 0));
+        book.setReview(getIntent().getStringExtra("review"));
+        
+        // Critical: preserve file information
+        String fileUrl = getIntent().getStringExtra("file_url");
+        String filePath = getIntent().getStringExtra("filePath");
+        String fileFormat = getIntent().getStringExtra("fileFormat");
+        
+        if (fileUrl != null && !fileUrl.isEmpty()) {
+            Log.d(TAG, "Setting file path from file_url: " + fileUrl);
+            book.setFilePath(fileUrl);
+        } else if (filePath != null && !filePath.isEmpty()) {
+            Log.d(TAG, "Setting file path: " + filePath);
+            book.setFilePath(filePath);
+        } else {
+            Log.e(TAG, "No file URL or path found for book");
+        }
+        
+        if (fileFormat != null) {
+            book.setFileFormat(fileFormat);
+        }
+        
+        Log.d(TAG, "Updating book status to: " + readingStatus);
+        Log.d(TAG, "Book file path: " + book.getFilePath());
+        Log.d(TAG, "Start date: " + startDate);
+        Log.d(TAG, "End date: " + endDate);
+        
+        supabaseService.saveBook(book, new SupabaseService.BookSaveCallback() {
+            @Override
+            public void onSuccess() {
+                Toast.makeText(BookActivity.this, "Статус обновлен", Toast.LENGTH_SHORT).show();
+                updateSectionsVisibility();
+            }
+            
+            @Override
+            public void onError(String error) {
+                Toast.makeText(BookActivity.this, "Ошибка обновления статуса: " + error, Toast.LENGTH_SHORT).show();
+                Log.e(TAG, "Error updating book status: " + error);
+            }
+        });
     }
-    
-    private void syncBookStatus(String status, String endDate) {
-        if (bookId == null || bookId.isEmpty()) {
-            Log.e(TAG, "Invalid book ID: null or empty");
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.menu_book, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        int id = item.getItemId();
+        
+        if (id == android.R.id.home) {
+            onBackPressed();
+            return true;
+        } else if (id == R.id.menu_add_to_shelf) {
+            showAddToShelfDialog();
+            return true;
+        }
+        
+        return super.onOptionsItemSelected(item);
+    }
+
+    private void showAddToShelfDialog() {
+        Dialog dialog = new Dialog(this);
+        dialog.setContentView(R.layout.dialog_add_to_shelf);
+        
+        RecyclerView recyclerViewShelves = dialog.findViewById(R.id.recyclerViewShelves);
+        TextView textViewNoShelves = dialog.findViewById(R.id.textViewNoShelves);
+        Button buttonSave = dialog.findViewById(R.id.buttonClose);
+        ProgressBar progressBar = dialog.findViewById(R.id.progressBar);
+        
+        // Show loading indicator
+        progressBar.setVisibility(View.VISIBLE);
+        textViewNoShelves.setVisibility(View.GONE);
+        recyclerViewShelves.setVisibility(View.GONE);
+        
+        // Get SupabaseService and SupabaseAuth instances
+        SupabaseService supabaseService = new SupabaseService(this);
+        SupabaseAuth supabaseAuth = new SupabaseAuth(this);
+        
+        // Get current user ID from Supabase
+        String currentUserId = supabaseAuth.getCurrentUserId();
+        if (currentUserId == null) {
+            Log.e(TAG, "Failed to get current user ID");
+            textViewNoShelves.setText("Вы не авторизованы. Пожалуйста, войдите в систему.");
+            textViewNoShelves.setVisibility(View.VISIBLE);
+            progressBar.setVisibility(View.GONE);
             return;
         }
-
-        // Use original status value directly
-        Log.d(TAG, "Syncing status to Supabase: " + status);
-
-        new Thread(() -> {
-            try {
-                // First, let's check the current status in Supabase
-                URL getUrl = new URL(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?id=eq." + bookId);
-                HttpURLConnection getConn = (HttpURLConnection) getUrl.openConnection();
-                getConn.setRequestMethod("GET");
-                getConn.setRequestProperty("apikey", SUPABASE_KEY);
-                getConn.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
-                getConn.setRequestProperty("Content-Type", "application/json");
+        
+        Log.d(TAG, "Loading shelves from Supabase for user: " + currentUserId);
+        
+        // Get all shelves for the current user directly from Supabase
+        supabaseService.getShelves(new SupabaseService.ShelvesLoadCallback() {
+            @Override
+            public void onSuccess(List<com.example.bookworm.models.Shelf> shelves) {
+                Log.d(TAG, "Successfully loaded " + shelves.size() + " shelves from Supabase");
                 
-                int getResponseCode = getConn.getResponseCode();
-                if (getResponseCode == HttpURLConnection.HTTP_OK) {
-                    java.io.BufferedReader br = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(getConn.getInputStream(), "utf-8"));
-                    StringBuilder response = new StringBuilder();
-                    String responseLine;
-                    while ((responseLine = br.readLine()) != null) {
-                        response.append(responseLine.trim());
-                    }
-                    br.close();
-                    Log.d(TAG, "Current book data: " + response.toString());
-                }
-                getConn.disconnect();
-                
-                // Now try to update the status
-                // Construct the URL with the correct endpoint
-                URL url = new URL(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?id=eq." + bookId);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                
-                // Set request method and headers
-                conn.setRequestMethod("PATCH");
-                conn.setRequestProperty("apikey", SUPABASE_KEY);
-                conn.setRequestProperty("Authorization", "Bearer " + SUPABASE_KEY);
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Prefer", "return=minimal");
-                conn.setDoOutput(true);
-
-                // Create JSON data
-                JSONObject data = new JSONObject();
-                
-                // Use the original status value directly
-                data.put("status", status);
-                
-                // Add end date if changing to "Прочитано"
-                if (endDate != null) {
-                    data.put("finish_date", endDate);
-                    Log.d(TAG, "Setting finish_date to: " + endDate);
-                }
-                
-                data.put("updated_at", new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
-                    .format(new Date()));
-                
-                String jsonData = data.toString();
-                Log.d(TAG, "Sending data to Supabase: " + jsonData);
-
-                // Write data to connection
-                try (OutputStream os = conn.getOutputStream()) {
-                    byte[] input = jsonData.getBytes("utf-8");
-                    os.write(input, 0, input.length);
-                }
-
-                // Get response
-                int responseCode = conn.getResponseCode();
-                if (responseCode != HttpURLConnection.HTTP_OK && responseCode != HttpURLConnection.HTTP_NO_CONTENT) {
-                    // Read error response
-                    try (java.io.BufferedReader br = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(conn.getErrorStream(), "utf-8"))) {
-                        StringBuilder response = new StringBuilder();
-                        String responseLine;
-                        while ((responseLine = br.readLine()) != null) {
-                            response.append(responseLine.trim());
+                runOnUiThread(() -> {
+                    progressBar.setVisibility(View.GONE);
+                    
+                    if (shelves.isEmpty()) {
+                        textViewNoShelves.setVisibility(View.VISIBLE);
+                        recyclerViewShelves.setVisibility(View.GONE);
+                    } else {
+                        textViewNoShelves.setVisibility(View.GONE);
+                        recyclerViewShelves.setVisibility(View.VISIBLE);
+                        
+                        // Convert to list of shelf IDs
+                        List<String> bookShelfIds = new ArrayList<>();
+                        for (com.example.bookworm.models.Shelf shelf : shelves) {
+                            if (shelf.getBookIds() != null && shelf.getBookIds().contains(bookId)) {
+                                bookShelfIds.add(shelf.getId());
+                            }
                         }
-                        Log.e(TAG, "Error response: " + response.toString());
-                        throw new Exception("HTTP error code: " + responseCode + ", Response: " + response.toString());
+                        
+                        // Create adapter for shelf selection
+                        ShelfSelectionAdapter adapter = new ShelfSelectionAdapter(
+                                BookActivity.this, 
+                                shelves, 
+                                bookShelfIds,
+                                (shelf, isChecked) -> {
+                                    // Use Supabase to add/remove book from shelf
+                                    if (isChecked) {
+                                        Log.d(TAG, "Adding book " + bookId + " to shelf " + shelf.getId());
+                                        supabaseService.addBookToShelf(bookId, shelf.getId(), new SupabaseService.BookShelfCallback() {
+                                            @Override
+                                            public void onSuccess() {
+                                                Log.d(TAG, "Successfully added book to shelf in Supabase");
+                                            }
+                                            
+                                            @Override
+                                            public void onError(String error) {
+                                                Log.e(TAG, "Error adding book to shelf: " + error);
+                                                Toast.makeText(BookActivity.this, "Ошибка при добавлении книги на полку", Toast.LENGTH_SHORT).show();
+                                            }
+                                        });
+                                    } else {
+                                        Log.d(TAG, "Removing book " + bookId + " from shelf " + shelf.getId());
+                                        supabaseService.removeBookFromShelf(bookId, shelf.getId(), new SupabaseService.BookShelfCallback() {
+                                            @Override
+                                            public void onSuccess() {
+                                                Log.d(TAG, "Successfully removed book from shelf in Supabase");
+                                            }
+                                            
+                                            @Override
+                                            public void onError(String error) {
+                                                Log.e(TAG, "Error removing book from shelf: " + error);
+                                                Toast.makeText(BookActivity.this, "Ошибка при удалении книги с полки", Toast.LENGTH_SHORT).show();
+                                            }
+                                        });
+                                    }
+                                });
+                        
+                        recyclerViewShelves.setAdapter(adapter);
+                        recyclerViewShelves.setLayoutManager(new LinearLayoutManager(BookActivity.this));
                     }
-                } else {
-                    runOnUiThread(() -> Toast.makeText(BookActivity.this, 
-                        "Статус книги успешно обновлен", Toast.LENGTH_SHORT).show());
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to sync book status with Supabase: " + e.getMessage());
-                runOnUiThread(() -> Toast.makeText(BookActivity.this, 
-                    "Ошибка при обновлении статуса: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                });
             }
-        }).start();
+            
+            @Override
+            public void onError(String error) {
+                Log.e(TAG, "Error loading shelves from Supabase: " + error);
+                
+                runOnUiThread(() -> {
+                    progressBar.setVisibility(View.GONE);
+                    textViewNoShelves.setText("Ошибка загрузки полок: " + error);
+                    textViewNoShelves.setVisibility(View.VISIBLE);
+                    recyclerViewShelves.setVisibility(View.GONE);
+                });
+            }
+        });
+        
+        buttonSave.setOnClickListener(v -> {
+            Toast.makeText(this, "Изменения сохранены", Toast.LENGTH_SHORT).show();
+            dialog.dismiss();
+        });
+        
+        dialog.show();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (supabaseService != null) {
+            supabaseService.shutdown();
+        }
     }
 }

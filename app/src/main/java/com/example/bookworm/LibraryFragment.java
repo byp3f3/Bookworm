@@ -318,6 +318,12 @@ public class LibraryFragment extends Fragment {
                         intent.putExtra("endDate", book.getEndDate());
                         intent.putExtra("rating", book.getRating());
                         intent.putExtra("review", book.getReview());
+                        
+                        // Добавляем передачу пути к файлу
+                        intent.putExtra("filePath", book.getFilePath());
+                        intent.putExtra("file_url", book.getFilePath());
+                        intent.putExtra("fileFormat", book.getFileFormat());
+                        
                         v.getContext().startActivity(intent);
                     }
                 });

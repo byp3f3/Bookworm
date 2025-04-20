@@ -12,6 +12,7 @@ import android.util.Log;
 import android.webkit.MimeTypeMap;
 
 import com.example.bookworm.Book;
+import com.example.bookworm.Quote;
 import com.example.bookworm.SupabaseAuth;
 
 import org.json.JSONArray;
@@ -28,8 +29,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.Date;
@@ -72,6 +75,42 @@ public class SupabaseService {
      */
     public interface BookCallback {
         void onSuccess(Book book);
+        void onError(String error);
+    }
+
+    public interface BooksLoadCallback {
+        void onSuccess(List<Book> books);
+        void onError(String error);
+    }
+
+    public interface QuoteCallback {
+        void onSuccess();
+        void onError(String error);
+    }
+
+    public interface QuotesLoadCallback {
+        void onSuccess(List<Quote> quotes);
+        void onError(String error);
+    }
+
+    // Add new interface callbacks for shelves
+    public interface ShelfCallback {
+        void onSuccess();
+        void onError(String error);
+    }
+
+    public interface ShelvesLoadCallback {
+        void onSuccess(List<com.example.bookworm.models.Shelf> shelves);
+        void onError(String error);
+    }
+
+    public interface BookShelfCallback {
+        void onSuccess();
+        void onError(String error);
+    }
+
+    public interface BooksIdsCallback {
+        void onSuccess(List<String> bookIds);
         void onError(String error);
     }
 
@@ -270,6 +309,42 @@ public class SupabaseService {
                     Log.d(TAG, "No cover path specified for book");
                 }
 
+                // Check if the file path is already a remote URL (starts with http)
+                if (book.getFilePath().startsWith("http")) {
+                    Log.d(TAG, "Book file is already a remote URL, skipping upload: " + book.getFilePath());
+                    
+                    // Check if cover needs to be uploaded
+                    if (book.getCoverPath() != null && book.getCoverPath().startsWith("http")) {
+                        // Cover is also a remote URL, skip upload
+                        Log.d(TAG, "Cover is already a remote URL, skipping upload: " + book.getCoverPath());
+                        saveBookToDatabase(book, userId, book.getFilePath(), book.getCoverPath(), callback);
+                    } else if (book.getCoverPath() != null) {
+                        // Cover is a local file, upload it
+                        Uri coverUri = Uri.parse(book.getCoverPath());
+                        String coverExtension = getFileExtension(coverUri);
+                        String coverFileName = book.getId() + "_cover_" + System.currentTimeMillis() + "." + coverExtension;
+                        
+                        uploadFile(coverUri, "covers", coverFileName, new FileUploadCallback() {
+                            @Override
+                            public void onSuccess(String coverUrl) {
+                                Log.d(TAG, "Cover upload successful: " + coverUrl);
+                                saveBookToDatabase(book, userId, book.getFilePath(), coverUrl, callback);
+                            }
+
+                            @Override
+                            public void onError(String error) {
+                                Log.e(TAG, "Failed to upload cover: " + error + ". Continuing without cover image.");
+                                saveBookToDatabase(book, userId, book.getFilePath(), null, callback);
+                            }
+                        });
+                    } else {
+                        // No cover, save with just the file URL
+                        saveBookToDatabase(book, userId, book.getFilePath(), null, callback);
+                    }
+                    return;
+                }
+
+                // Local file - upload it
                 Uri bookUri = Uri.parse(book.getFilePath());
                 String bookExtension = getFileExtension(bookUri);
                 String bookFileName = book.getId() + "_" + System.currentTimeMillis() + "." + bookExtension;
@@ -326,12 +401,21 @@ public class SupabaseService {
                 bookData.put("id", book.getId());
                 bookData.put("title", book.getTitle());
                 bookData.put("author", book.getAuthor());
-                bookData.put("description", book.getDescription());
+                
+                // Only include description if not null
+                if (book.getDescription() != null) {
+                    bookData.put("description", book.getDescription());
+                }
+                
                 bookData.put("page_count", book.getTotalPages());
                 bookData.put("status", book.getStatus());
                 bookData.put("current_page", book.getCurrentPage());
                 bookData.put("file_url", fileUrl);
-                bookData.put("cover_image_url", coverUrl);
+                
+                // Only include coverUrl if not null
+                if (coverUrl != null) {
+                    bookData.put("cover_image_url", coverUrl);
+                }
 
                 // Optional fields
                 int rating = book.getRating();
@@ -343,22 +427,43 @@ public class SupabaseService {
                     bookData.put("review", book.getReview());
                 }
 
-                if (book.getStartDate() != null) {
+                // Handle dates properly - only include if not null and not empty
+                if (book.getStartDate() != null && !book.getStartDate().isEmpty() && !book.getStartDate().equals("null")) {
                     bookData.put("start_date", book.getStartDate());
+                    Log.d(TAG, "Setting start_date: " + book.getStartDate());
+                } else {
+                    Log.d(TAG, "Skipping null/empty start_date");
                 }
 
-                if (book.getEndDate() != null) {
+                if (book.getEndDate() != null && !book.getEndDate().isEmpty() && !book.getEndDate().equals("null")) {
                     bookData.put("finish_date", book.getEndDate());
+                    Log.d(TAG, "Setting finish_date: " + book.getEndDate());
+                } else {
+                    Log.d(TAG, "Skipping null/empty finish_date");
                 }
 
                 // Technical fields
                 bookData.put("file_format", getFileFormatFromUrl(fileUrl));
                 bookData.put("user_id", userId);
 
-                // 2. Configure connection
-                URL url = new URL(SUPABASE_URL + "/rest/v1/books");
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestMethod("POST");
+                Log.d(TAG, "Saving book data: " + bookData.toString());
+
+                // 2. Configure connection - use PATCH for updating existing books, POST for new books
+                URL url;
+                if (book.isExist()) {
+                    // Updating existing book - use PATCH
+                    url = new URL(SUPABASE_URL + "/rest/v1/books?id=eq." + book.getId());
+                    connection = (HttpURLConnection) url.openConnection();
+                    connection.setRequestMethod("PATCH");
+                    Log.d(TAG, "Using PATCH to update existing book: " + book.getId());
+                } else {
+                    // Creating new book - use POST
+                    url = new URL(SUPABASE_URL + "/rest/v1/books");
+                    connection = (HttpURLConnection) url.openConnection();
+                    connection.setRequestMethod("POST");
+                    Log.d(TAG, "Using POST to create new book");
+                }
+                
                 connection.setRequestProperty("Content-Type", "application/json");
                 connection.setRequestProperty("apikey", SUPABASE_KEY);
                 connection.setRequestProperty("Authorization", "Bearer " + supabaseAuth.getAccessToken());
@@ -533,6 +638,16 @@ public class SupabaseService {
                         book.setStartDate(bookJson.optString("start_date", null));
                         book.setEndDate(bookJson.optString("finish_date", null));
                         book.setRating(bookJson.optInt("rating", 0));
+                        
+                        // Добавляем загрузку file_url из базы данных
+                        if (bookJson.has("file_url") && !bookJson.isNull("file_url")) {
+                            String fileUrl = bookJson.getString("file_url");
+                            book.setFilePath(fileUrl);
+                            
+                            // Определяем формат файла по URL
+                            String fileFormat = getFileFormatFromUrl(fileUrl);
+                            book.setFileFormat(fileFormat);
+                        }
 
                         books.add(book);
                     }
@@ -626,6 +741,16 @@ public class SupabaseService {
                         book.setStartDate(bookJson.optString("start_date", null));
                         book.setEndDate(bookJson.optString("finish_date", null));
                         book.setRating(bookJson.optInt("rating", 0));
+                        
+                        // Добавляем загрузку file_url из базы данных
+                        if (bookJson.has("file_url") && !bookJson.isNull("file_url")) {
+                            String fileUrl = bookJson.getString("file_url");
+                            book.setFilePath(fileUrl);
+                            
+                            // Определяем формат файла по URL
+                            String fileFormat = getFileFormatFromUrl(fileUrl);
+                            book.setFileFormat(fileFormat);
+                        }
 
                         books.add(book);
                     }
@@ -659,11 +784,6 @@ public class SupabaseService {
 
     private void notifyError(BooksLoadCallback callback, String error) {
         mainHandler.post(() -> callback.onError(error));
-    }
-
-    public interface BooksLoadCallback {
-        void onSuccess(List<Book> books);
-        void onError(String error);
     }
 
     /**
@@ -1292,6 +1412,841 @@ public class SupabaseService {
         }
         
         return false;
+    }
+
+    public void saveQuote(Quote quote, QuoteCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+
+            try {
+                // 1. Проверка аутентификации
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                // 2. Подготовка JSON данных
+                JSONObject quoteData = new JSONObject();
+                quoteData.put("id", quote.getId());
+                quoteData.put("book_id", quote.getBookId());
+                quoteData.put("user_id", quote.getUserId());
+                quoteData.put("text", quote.getText());
+                quoteData.put("start_page", quote.getStartPage());
+                quoteData.put("end_page", quote.getEndPage());
+                quoteData.put("created_at", quote.getCreatedAt());
+
+                // 3. Настройка соединения
+                URL url = new URL(SUPABASE_URL + "/rest/v1/quotes");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setRequestProperty("Prefer", "return=minimal");
+                connection.setDoOutput(true);
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+
+                // 4. Отправка данных
+                try (OutputStream os = connection.getOutputStream()) {
+                    byte[] input = quoteData.toString().getBytes(StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+
+                // 5. Обработка ответа
+                int responseCode = connection.getResponseCode();
+                if (responseCode >= 200 && responseCode < 300) {
+                    notifySuccess(callback);
+                } else {
+                    String errorMsg = readErrorResponse(connection);
+                    notifyError(callback, "Ошибка сохранения цитаты: " + responseCode + " - " + errorMsg);
+                }
+            } catch (Exception e) {
+                notifyError(callback, "Ошибка: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    public void getQuotesForBook(String bookId, QuotesLoadCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            BufferedReader reader = null;
+
+            try {
+                // 1. Проверка аутентификации
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                // 2. Настройка соединения
+                String urlString = SUPABASE_URL + "/rest/v1/quotes?book_id=eq." + bookId + "&order=created_at.desc";
+                URL url = new URL(urlString);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+
+                // 3. Обработка ответа
+                int responseCode = connection.getResponseCode();
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+
+                    JSONArray quotesArray = new JSONArray(response.toString());
+                    List<Quote> quotes = new ArrayList<>();
+
+                    for (int i = 0; i < quotesArray.length(); i++) {
+                        JSONObject quoteJson = quotesArray.getJSONObject(i);
+                        Quote quote = new Quote(
+                                quoteJson.getString("id"),
+                                quoteJson.getString("book_id"),
+                                quoteJson.getString("user_id"),
+                                quoteJson.getString("text"),
+                                quoteJson.getInt("start_page"),
+                                quoteJson.getInt("end_page"),
+                                quoteJson.getLong("created_at")
+                        );
+                        quotes.add(quote);
+                    }
+
+                    notifySuccess(callback, quotes);
+                } else {
+                    String errorMsg = readErrorResponse(connection);
+                    notifyError(callback, "Ошибка загрузки цитат: " + responseCode + " - " + errorMsg);
+                }
+            } catch (Exception e) {
+                notifyError(callback, "Ошибка: " + e.getMessage());
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException e) {
+                        Log.w(TAG, "Error closing reader", e);
+                    }
+                }
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    public void deleteQuote(String quoteId, QuoteCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+
+            try {
+                // 1. Проверка аутентификации
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                // 2. Настройка соединения
+                URL url = new URL(SUPABASE_URL + "/rest/v1/quotes?id=eq." + quoteId);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("DELETE");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setRequestProperty("Prefer", "return=minimal");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
+
+                // 3. Обработка ответа
+                int responseCode = connection.getResponseCode();
+                if (responseCode >= 200 && responseCode < 300) {
+                    notifySuccess(callback);
+                } else {
+                    String errorMsg = readErrorResponse(connection);
+                    notifyError(callback, "Ошибка удаления цитаты: " + responseCode + " - " + errorMsg);
+                }
+            } catch (Exception e) {
+                notifyError(callback, "Ошибка: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    private void notifySuccess(QuoteCallback callback) {
+        mainHandler.post(callback::onSuccess);
+    }
+
+    private void notifyError(QuoteCallback callback, String error) {
+        mainHandler.post(() -> callback.onError(error));
+    }
+
+    private void notifySuccess(QuotesLoadCallback callback, List<Quote> quotes) {
+        mainHandler.post(() -> callback.onSuccess(quotes));
+    }
+
+    private void notifyError(QuotesLoadCallback callback, String error) {
+        mainHandler.post(() -> callback.onError(error));
+    }
+
+    /**
+     * Gets the current user ID from the JWT token
+     * @return User ID or null if not authenticated
+     */
+    public String getUserId() {
+        String accessToken = supabaseAuth.getAccessToken();
+        if (accessToken == null) {
+            return null;
+        }
+        return getUserIdFromToken(accessToken);
+    }
+
+    // Add new methods for shelf operations
+    /**
+     * Save a shelf to Supabase
+     * @param shelf The shelf to save
+     * @param callback Callback for success/error
+     */
+    public void saveShelf(com.example.bookworm.models.Shelf shelf, ShelfCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                // Get the user id from the token
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    Log.e(TAG, "Failed to save shelf: User not authenticated");
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+                
+                Log.d(TAG, "Attempting to save shelf to Supabase: " + shelf.getName() + " (ID: " + shelf.getId() + ")");
+                Log.d(TAG, "Using URL: " + SUPABASE_URL + "/rest/v1/shelves");
+                Log.d(TAG, "User ID: " + supabaseAuth.getCurrentUserId());
+
+                URL url = new URL(SUPABASE_URL + "/rest/v1/shelves");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("Prefer", "return=representation");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setDoOutput(true);
+
+                // Create JSON payload
+                JSONObject shelfJson = new JSONObject();
+                shelfJson.put("shelf_id", shelf.getId());
+                shelfJson.put("shelf_name", shelf.getName());
+                shelfJson.put("shelf_description", shelf.getDescription());
+                shelfJson.put("user_id", supabaseAuth.getCurrentUserId());
+                
+                String jsonPayload = shelfJson.toString();
+                Log.d(TAG, "Sending shelf data: " + jsonPayload);
+
+                // Write JSON to connection
+                try (OutputStream os = connection.getOutputStream()) {
+                    byte[] input = jsonPayload.getBytes(StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+
+                int responseCode = connection.getResponseCode();
+                Log.d(TAG, "Save shelf response code: " + responseCode);
+
+                if (responseCode == HttpURLConnection.HTTP_CREATED || responseCode == HttpURLConnection.HTTP_OK) {
+                    Log.d(TAG, "Successfully saved shelf to Supabase: " + shelf.getName());
+                    notifySuccess(callback);
+                } else {
+                    String errorResponse = readErrorResponse(connection);
+                    Log.e(TAG, "Error saving shelf to Supabase: " + errorResponse + " (Response code: " + responseCode + ")");
+                    
+                    // Check if there are any specific error messages in the response
+                    try {
+                        JSONObject errorJson = new JSONObject(errorResponse);
+                        if (errorJson.has("message")) {
+                            Log.e(TAG, "Error message: " + errorJson.getString("message"));
+                        }
+                        if (errorJson.has("details")) {
+                            Log.e(TAG, "Error details: " + errorJson.getString("details"));
+                        }
+                    } catch (JSONException e) {
+                        Log.e(TAG, "Error response not in JSON format: " + errorResponse);
+                    }
+                    
+                    notifyError(callback, "Failed to save shelf: " + errorResponse);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Exception saving shelf to Supabase", e);
+                notifyError(callback, "Error saving shelf: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    /**
+     * Update an existing shelf in Supabase
+     * @param shelf The shelf to update
+     * @param callback Callback for success/error
+     */
+    public void updateShelf(com.example.bookworm.models.Shelf shelf, ShelfCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                // Get the user id from the token
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                URL url = new URL(SUPABASE_URL + "/rest/v1/shelves?shelf_id=eq." + shelf.getId());
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("PATCH");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("Prefer", "return=representation");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setDoOutput(true);
+
+                // Create JSON payload
+                JSONObject shelfJson = new JSONObject();
+                shelfJson.put("shelf_name", shelf.getName());
+                shelfJson.put("shelf_description", shelf.getDescription());
+
+                // Write JSON to connection
+                try (OutputStream os = connection.getOutputStream()) {
+                    byte[] input = shelfJson.toString().getBytes(StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+
+                int responseCode = connection.getResponseCode();
+                Log.d(TAG, "Update shelf response code: " + responseCode);
+
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    notifySuccess(callback);
+                } else {
+                    String errorResponse = readErrorResponse(connection);
+                    Log.e(TAG, "Error updating shelf: " + errorResponse);
+                    notifyError(callback, "Failed to update shelf: " + errorResponse);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error updating shelf in Supabase", e);
+                notifyError(callback, "Error updating shelf: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    /**
+     * Delete a shelf from Supabase
+     * @param shelfId The ID of the shelf to delete
+     * @param callback Callback for success/error
+     */
+    public void deleteShelf(String shelfId, ShelfCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                // Get the user id from the token
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                URL url = new URL(SUPABASE_URL + "/rest/v1/shelves?shelf_id=eq." + shelfId);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("DELETE");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+
+                int responseCode = connection.getResponseCode();
+                Log.d(TAG, "Delete shelf response code: " + responseCode);
+
+                if (responseCode == HttpURLConnection.HTTP_NO_CONTENT || responseCode == HttpURLConnection.HTTP_OK) {
+                    notifySuccess(callback);
+                } else {
+                    String errorResponse = readErrorResponse(connection);
+                    Log.e(TAG, "Error deleting shelf: " + errorResponse);
+                    notifyError(callback, "Failed to delete shelf: " + errorResponse);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error deleting shelf from Supabase", e);
+                notifyError(callback, "Error deleting shelf: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    /**
+     * Add a book to a shelf in Supabase
+     * @param bookId The book ID
+     * @param shelfId The shelf ID
+     * @param callback Callback for success/error
+     */
+    public void addBookToShelf(String bookId, String shelfId, BookShelfCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                if (bookId == null || bookId.isEmpty()) {
+                    Log.e(TAG, "addBookToShelf: Invalid book ID (null or empty)");
+                    notifyError(callback, "Invalid book ID");
+                    return;
+                }
+                
+                if (shelfId == null || shelfId.isEmpty()) {
+                    Log.e(TAG, "addBookToShelf: Invalid shelf ID (null or empty)");
+                    notifyError(callback, "Invalid shelf ID");
+                    return;
+                }
+                
+                // Get the user id from the token
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    Log.e(TAG, "addBookToShelf: User not authenticated (null access token)");
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                Log.d(TAG, "addBookToShelf: Adding book " + bookId + " to shelf " + shelfId);
+                
+                URL url = new URL(SUPABASE_URL + "/rest/v1/book_shelf");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("Prefer", "return=representation");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+                connection.setDoOutput(true);
+
+                // Create JSON payload
+                JSONObject bookShelfJson = new JSONObject();
+                bookShelfJson.put("book_id", bookId);
+                bookShelfJson.put("shelf_id", shelfId);
+                
+                String jsonPayload = bookShelfJson.toString();
+                Log.d(TAG, "addBookToShelf: Sending payload: " + jsonPayload);
+
+                // Write JSON to connection
+                try (OutputStream os = connection.getOutputStream()) {
+                    byte[] input = jsonPayload.getBytes(StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+
+                int responseCode = connection.getResponseCode();
+                Log.d(TAG, "addBookToShelf: Response code: " + responseCode);
+
+                if (responseCode == HttpURLConnection.HTTP_CREATED || responseCode == HttpURLConnection.HTTP_OK) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                        StringBuilder response = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            response.append(line);
+                        }
+                        Log.d(TAG, "addBookToShelf: Success response: " + response.toString());
+                    } catch (Exception e) {
+                        Log.w(TAG, "addBookToShelf: Could not read success response", e);
+                    }
+                    
+                    Log.d(TAG, "addBookToShelf: Successfully added book to shelf");
+                    notifySuccess(callback);
+                } else {
+                    String errorResponse = readErrorResponse(connection);
+                    Log.e(TAG, "addBookToShelf: Error adding book to shelf: " + errorResponse);
+                    
+                    // Check if it's a conflict error (book already in shelf)
+                    if (responseCode == HttpURLConnection.HTTP_CONFLICT) {
+                        Log.d(TAG, "addBookToShelf: Book is already in the shelf (conflict)");
+                        notifySuccess(callback); // Treat as success since the desired state is achieved
+                    } else {
+                        notifyError(callback, "Failed to add book to shelf: " + errorResponse);
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "addBookToShelf: Exception adding book to shelf in Supabase", e);
+                notifyError(callback, "Error adding book to shelf: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    /**
+     * Remove a book from a shelf in Supabase
+     * @param bookId The book ID
+     * @param shelfId The shelf ID
+     * @param callback Callback for success/error
+     */
+    public void removeBookFromShelf(String bookId, String shelfId, BookShelfCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                if (bookId == null || bookId.isEmpty()) {
+                    Log.e(TAG, "removeBookFromShelf: Invalid book ID (null or empty)");
+                    notifyError(callback, "Invalid book ID");
+                    return;
+                }
+                
+                if (shelfId == null || shelfId.isEmpty()) {
+                    Log.e(TAG, "removeBookFromShelf: Invalid shelf ID (null or empty)");
+                    notifyError(callback, "Invalid shelf ID");
+                    return;
+                }
+                
+                // Get the user id from the token
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    Log.e(TAG, "removeBookFromShelf: User not authenticated (null access token)");
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+
+                Log.d(TAG, "removeBookFromShelf: Removing book " + bookId + " from shelf " + shelfId);
+                
+                URL url = new URL(SUPABASE_URL + "/rest/v1/book_shelf?book_id=eq." + bookId + "&shelf_id=eq." + shelfId);
+                Log.d(TAG, "removeBookFromShelf: URL: " + url.toString());
+                
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("DELETE");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+
+                int responseCode = connection.getResponseCode();
+                Log.d(TAG, "removeBookFromShelf: Response code: " + responseCode);
+
+                if (responseCode == HttpURLConnection.HTTP_NO_CONTENT || responseCode == HttpURLConnection.HTTP_OK) {
+                    Log.d(TAG, "removeBookFromShelf: Successfully removed book from shelf");
+                    notifySuccess(callback);
+                } else {
+                    String errorResponse = readErrorResponse(connection);
+                    Log.e(TAG, "removeBookFromShelf: Error removing book from shelf: " + errorResponse + " (code: " + responseCode + ")");
+                    
+                    // Check if it's a not found error (book not in shelf)
+                    if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                        Log.d(TAG, "removeBookFromShelf: Book was not in the shelf (not found)");
+                        notifySuccess(callback); // Treat as success since the desired state is achieved
+                    } else {
+                        notifyError(callback, "Failed to remove book from shelf: " + errorResponse);
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "removeBookFromShelf: Exception removing book from shelf in Supabase", e);
+                notifyError(callback, "Error removing book from shelf: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    /**
+     * Get all shelves for a user from Supabase
+     * @param callback Callback to return the shelves list
+     */
+    public void getShelves(ShelvesLoadCallback callback) {
+        executorService.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                // Get the user id from the token
+                String accessToken = supabaseAuth.getAccessToken();
+                if (accessToken == null) {
+                    Log.e(TAG, "getShelves: Failed - User not authenticated (null access token)");
+                    notifyError(callback, "User not authenticated");
+                    return;
+                }
+                
+                String userId = supabaseAuth.getCurrentUserId();
+                if (userId == null) {
+                    Log.e(TAG, "getShelves: Failed - User ID not found (null user ID)");
+                    notifyError(callback, "User ID not found");
+                    return;
+                }
+                
+                Log.d(TAG, "getShelves: Fetching shelves for user: " + userId);
+
+                URL url = new URL(SUPABASE_URL + "/rest/v1/shelves?user_id=eq." + userId + "&order=shelf_name.asc");
+                Log.d(TAG, "getShelves: URL: " + url.toString());
+                
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("apikey", SUPABASE_KEY);
+                connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+
+                int responseCode = connection.getResponseCode();
+                Log.d(TAG, "getShelves: Response code: " + responseCode);
+
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    // Read the response
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                        StringBuilder response = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            response.append(line);
+                        }
+
+                        String responseStr = response.toString();
+                        Log.d(TAG, "getShelves: Raw response: " + responseStr);
+
+                        // Parse JSON response
+                        JSONArray shelvesArray = new JSONArray(responseStr);
+                        Log.d(TAG, "getShelves: Found " + shelvesArray.length() + " shelves");
+                        List<com.example.bookworm.models.Shelf> shelves = new ArrayList<>();
+
+                        for (int i = 0; i < shelvesArray.length(); i++) {
+                            JSONObject shelfJson = shelvesArray.getJSONObject(i);
+                            com.example.bookworm.models.Shelf shelf = new com.example.bookworm.models.Shelf();
+                            
+                            // Check for "id" or "shelf_id" field - database might use either name
+                            String shelfId;
+                            if (shelfJson.has("id")) {
+                                shelfId = shelfJson.getString("id");
+                                shelf.setId(shelfId);
+                            } else if (shelfJson.has("shelf_id")) {
+                                shelfId = shelfJson.getString("shelf_id");
+                                shelf.setId(shelfId);
+                            } else {
+                                Log.e(TAG, "getShelves: Missing ID field in shelf: " + shelfJson);
+                                continue; // Skip this shelf
+                            }
+                            
+                            // Check for "name" or "shelf_name" field - database might use either name
+                            if (shelfJson.has("name")) {
+                                shelf.setName(shelfJson.getString("name"));
+                            } else if (shelfJson.has("shelf_name")) {
+                                shelf.setName(shelfJson.getString("shelf_name"));
+                            } else {
+                                Log.e(TAG, "getShelves: Missing name field in shelf: " + shelfJson);
+                                shelf.setName("Unnamed Shelf");
+                            }
+                            
+                            // Check for "description" or "shelf_description" field
+                            if (shelfJson.has("description")) {
+                                shelf.setDescription(shelfJson.optString("description", ""));
+                            } else if (shelfJson.has("shelf_description")) {
+                                shelf.setDescription(shelfJson.optString("shelf_description", ""));
+                            } else {
+                                shelf.setDescription("");
+                            }
+                            
+                            // Check for "user_id" field
+                            if (shelfJson.has("user_id")) {
+                                shelf.setUserId(shelfJson.getString("user_id"));
+                            } else {
+                                shelf.setUserId(userId); // Use current user ID as fallback
+                            }
+                            
+                            Log.d(TAG, "getShelves: Created shelf object: ID=" + shelf.getId() + ", Name=" + shelf.getName());
+                            
+                            // Get book IDs for this shelf
+                            List<String> bookIds = getBookIdsForShelfSync(shelf.getId(), accessToken);
+                            Log.d(TAG, "getShelves: Retrieved " + bookIds.size() + " book IDs for shelf " + shelf.getId());
+                            shelf.setBookIds(bookIds);
+                            
+                            shelves.add(shelf);
+                        }
+
+                        Log.d(TAG, "getShelves: Successfully processed " + shelves.size() + " shelves");
+                        notifySuccess(callback, shelves);
+                    }
+                } else {
+                    String errorResponse = readErrorResponse(connection);
+                    Log.e(TAG, "getShelves: Error getting shelves: " + errorResponse);
+                    notifyError(callback, "Failed to get shelves: " + errorResponse);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "getShelves: Exception getting shelves from Supabase", e);
+                notifyError(callback, "Error getting shelves: " + e.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        });
+    }
+
+    /**
+     * Get book IDs for a shelf synchronously (for internal use)
+     * @param shelfId The shelf ID
+     * @param accessToken The access token
+     * @return List of book IDs
+     */
+    private List<String> getBookIdsForShelfSync(String shelfId, String accessToken) {
+        HttpURLConnection connection = null;
+        Set<String> uniqueBookIds = new HashSet<>(); // Using HashSet to ensure uniqueness
+        
+        Log.d(TAG, "getBookIdsForShelfSync: Retrieving book IDs for shelf: " + shelfId);
+        
+        try {
+            // The correct URL to query the book_shelf table
+            URL url = new URL(SUPABASE_URL + "/rest/v1/book_shelf?shelf_id=eq." + shelfId + "&select=book_id,shelf_id");
+            Log.d(TAG, "getBookIdsForShelfSync: URL: " + url.toString());
+            
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("apikey", SUPABASE_KEY);
+            connection.setRequestProperty("Authorization", "Bearer " + accessToken);
+
+            int responseCode = connection.getResponseCode();
+            Log.d(TAG, "Get book IDs for shelf response code: " + responseCode);
+
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                // Read the response
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+
+                    String responseStr = response.toString();
+                    Log.d(TAG, "getBookIdsForShelfSync: Raw response: " + responseStr);
+
+                    // Parse JSON response
+                    JSONArray bookIdsArray = new JSONArray(responseStr);
+                    Log.d(TAG, "getBookIdsForShelfSync: Found " + bookIdsArray.length() + " book entries");
+                    
+                    for (int i = 0; i < bookIdsArray.length(); i++) {
+                        JSONObject bookIdJson = bookIdsArray.getJSONObject(i);
+                        if (bookIdJson.has("book_id")) {
+                            String bookId = bookIdJson.getString("book_id");
+                            
+                            // Add to HashSet which automatically prevents duplicates
+                            if (uniqueBookIds.add(bookId)) {
+                                Log.d(TAG, "getBookIdsForShelfSync: Adding book ID: " + bookId);
+                            } else {
+                                Log.d(TAG, "getBookIdsForShelfSync: Skipping duplicate book ID: " + bookId);
+                            }
+                        } else {
+                            Log.e(TAG, "getBookIdsForShelfSync: Missing book_id field in response item: " + bookIdJson);
+                        }
+                    }
+                }
+            } else {
+                String errorResponse = readErrorResponse(connection);
+                Log.e(TAG, "Error getting book IDs for shelf: " + errorResponse);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error getting book IDs for shelf from Supabase", e);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+        
+        // Convert back to List for return
+        List<String> bookIds = new ArrayList<>(uniqueBookIds);
+        Log.d(TAG, "getBookIdsForShelfSync: Returning " + bookIds.size() + " unique book IDs for shelf " + shelfId);
+        return bookIds;
+    }
+
+    /**
+     * Get book IDs for a shelf
+     * @param shelfId The shelf ID
+     * @param callback Callback to return the book IDs
+     */
+    public void getBookIdsForShelf(String shelfId, final BooksIdsCallback callback) {
+        executorService.execute(() -> {
+            // Get the user id from the token
+            String accessToken = supabaseAuth.getAccessToken();
+            if (accessToken == null) {
+                if (callback != null) {
+                    mainHandler.post(() -> callback.onError("User not authenticated"));
+                }
+                return;
+            }
+            
+            List<String> bookIds = getBookIdsForShelfSync(shelfId, accessToken);
+            if (callback != null) {
+                mainHandler.post(() -> callback.onSuccess(bookIds));
+            }
+        });
+    }
+
+    /**
+     * Get the current user ID (helper method)
+     * @return The current user ID or null if not authenticated
+     */
+    public String getCurrentUserId() {
+        try {
+            String accessToken = supabaseAuth.getAccessToken();
+            return accessToken != null ? getUserIdFromToken(accessToken) : null;
+        } catch (Exception e) {
+            Log.e(TAG, "Error getting current user ID", e);
+            return null;
+        }
+    }
+
+    // Add notifySuccess and notifyError methods for new interfaces
+    private void notifySuccess(ShelfCallback callback) {
+        if (callback != null) {
+            mainHandler.post(callback::onSuccess);
+        }
+    }
+
+    private void notifyError(ShelfCallback callback, String error) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onError(error));
+        }
+    }
+
+    private void notifySuccess(ShelvesLoadCallback callback, List<com.example.bookworm.models.Shelf> shelves) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onSuccess(shelves));
+        }
+    }
+
+    private void notifyError(ShelvesLoadCallback callback, String error) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onError(error));
+        }
+    }
+
+    private void notifySuccess(BookShelfCallback callback) {
+        if (callback != null) {
+            mainHandler.post(callback::onSuccess);
+        }
+    }
+
+    private void notifyError(BookShelfCallback callback, String error) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onError(error));
+        }
+    }
+
+    private void notifySuccess(BooksIdsCallback callback, List<String> bookIds) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onSuccess(bookIds));
+        }
+    }
+
+    private void notifyError(BooksIdsCallback callback, String error) {
+        if (callback != null) {
+            mainHandler.post(() -> callback.onError(error));
+        }
     }
 }
 

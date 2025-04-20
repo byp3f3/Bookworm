@@ -1346,116 +1346,88 @@ public class BookFileReader {
     }
 
     public static void readBookContent(Context context, Uri fileUri, BookContentCallback callback) {
-        String mimeType = null;
-        Log.d(TAG, "Initial mime type from ContentResolver: " + mimeType);
-        
-        // Проверяем тип URI
+        // Check if this is a network URL and needs to be downloaded
         String scheme = fileUri.getScheme();
-        String path = fileUri.getPath();
-        Log.d(TAG, "File URI scheme: " + scheme + ", path: " + path);
-        
-        // Получаем MIME-тип в зависимости от схемы URI
+        if ("https".equals(scheme) || "http".equals(scheme)) {
+            // Run download in background thread
+            new Thread(() -> {
+                try {
+                    // Download the file (existing download code)
+                    java.io.File tempDir = new java.io.File(context.getFilesDir(), "temp_books");
+                    if (!tempDir.exists()) {
+                        tempDir.mkdirs();
+                    }
+
+                    String fileName = "temp_" + System.currentTimeMillis();
+                    String fileExtension = getFileExtension(fileUri.toString());
+                    if (fileExtension != null && !fileExtension.isEmpty()) {
+                        fileName += "." + fileExtension;
+                    }
+
+                    java.io.File tempFile = new java.io.File(tempDir, fileName);
+
+                    java.net.URL url = new java.net.URL(fileUri.toString());
+                    java.net.HttpURLConnection connection = (java.net.HttpURLConnection) url.openConnection();
+
+                    if (connection.getResponseCode() == java.net.HttpURLConnection.HTTP_OK) {
+                        try (java.io.InputStream inputStream = connection.getInputStream();
+                             java.io.FileOutputStream outputStream = new java.io.FileOutputStream(tempFile)) {
+                            byte[] buffer = new byte[4096];
+                            int bytesRead;
+                            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                                outputStream.write(buffer, 0, bytesRead);
+                            }
+                        }
+
+                        // Process the downloaded file on main thread
+                        Uri localUri = android.net.Uri.fromFile(tempFile);
+                        processLocalFile(context, localUri, callback);
+                    } else {
+                        callback.onError("Failed to download file: " + connection.getResponseCode());
+                    }
+                } catch (Exception e) {
+                    callback.onError("Error downloading file: " + e.getMessage());
+                }
+            }).start();
+        } else {
+            // Local file - process directly
+            processLocalFile(context, fileUri, callback);
+        }
+    }
+
+    private static void processLocalFile(Context context, Uri fileUri, BookContentCallback callback) {
+        String mimeType = null;
+
+        // Get MIME type based on URI scheme
+        String scheme = fileUri.getScheme();
         if ("content".equals(scheme)) {
-            // Для URI контент-провайдера
             try {
                 mimeType = context.getContentResolver().getType(fileUri);
             } catch (Exception e) {
-                Log.e(TAG, "Error getting mime type from content resolver", e);
+                Log.e(TAG, "Error getting mime type", e);
             }
         }
-        
-        // Если тип не определен или у нас прямой путь к файлу
-        if (mimeType == null && path != null) {
-            // Определить тип по расширению файла
-            if (path.toLowerCase().endsWith(".epub")) {
-                mimeType = "application/epub+zip";
-                Log.d(TAG, "Detected EPUB from file extension");
-            } else if (path.toLowerCase().endsWith(".fb2")) {
-                mimeType = "application/x-fictionbook+xml";
-                Log.d(TAG, "Detected FB2 from file extension");
-            } else if (path.toLowerCase().endsWith(".txt")) {
-                mimeType = "text/plain";
-                Log.d(TAG, "Detected TXT from file extension");
-            } else {
-                // Определить тип по содержимому файла
-                try {
-                    InputStream inputStream = null;
-                    
-                    // Открываем поток согласно схеме URI
-                    if ("content".equals(scheme)) {
-                        inputStream = context.getContentResolver().openInputStream(fileUri);
-                    } else if ("file".equals(scheme) || scheme == null) {
-                        // Для прямого файлового пути
-                        inputStream = new java.io.FileInputStream(path);
-                    }
-                    
-                    if (inputStream != null) {
-                        // Проверяем, является ли файл EPUB (ZIP-архивом)
-                        try {
-                            // Читаем первые байты для определения сигнатуры ZIP
-                            byte[] buffer = new byte[4];
-                            int bytesRead = inputStream.read(buffer);
-                            if (bytesRead >= 4 && 
-                                buffer[0] == 0x50 && buffer[1] == 0x4B && 
-                                buffer[2] == 0x03 && buffer[3] == 0x04) {
-                                mimeType = "application/epub+zip";
-                                Log.d(TAG, "Detected EPUB from file signature");
-                            }
-                            inputStream.close();
-                            
+
+        // If MIME type still not determined, try by file extension
         if (mimeType == null) {
-                                // Если это не ZIP, проверяем на FB2 (XML-файл)
-                                if ("content".equals(scheme)) {
-                                    inputStream = context.getContentResolver().openInputStream(fileUri);
-                                } else if ("file".equals(scheme) || scheme == null) {
-                                    inputStream = new java.io.FileInputStream(path);
-                                }
-                                
-                                XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
-                                factory.setNamespaceAware(true);
-                                XmlPullParser parser = factory.newPullParser();
-                                parser.setInput(inputStream, null);
-                                
-                                int eventType = parser.getEventType();
-                                while (eventType != XmlPullParser.END_DOCUMENT) {
-                                    if (eventType == XmlPullParser.START_TAG) {
-                                        String tagName = parser.getName();
-                                        if (tagName.equals("FictionBook")) {
-                                            mimeType = "application/x-fictionbook+xml";
-                                            Log.d(TAG, "Detected FB2 from content");
-                                            break;
-                                        }
-                                    }
-                                    eventType = parser.next();
-                                }
-                                inputStream.close();
-                            }
-                            
-                            // Если не определили тип, считаем текстовым файлом
-                            if (mimeType == null) {
-                                mimeType = "text/plain";
-                                Log.d(TAG, "Assuming text file");
-                            }
-                        } catch (Exception e) {
-                            // Ошибка при анализе содержимого
-                            Log.e(TAG, "Error determining file type from content", e);
-                            mimeType = "text/plain"; // Предполагаем, что это текстовый файл
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "Error accessing file", e);
+            String path = fileUri.getPath();
+            if (path != null) {
+                if (path.toLowerCase().endsWith(".epub")) {
+                    mimeType = "application/epub+zip";
+                } else if (path.toLowerCase().endsWith(".fb2")) {
+                    mimeType = "application/x-fictionbook+xml";
+                } else if (path.toLowerCase().endsWith(".txt")) {
+                    mimeType = "text/plain";
                 }
             }
         }
-        
-        if (mimeType == null) {
-            Log.e(TAG, "Failed to determine file type");
-            callback.onError("Не удалось определить тип файла");
-            return;
-        }
 
         try {
-            Log.d(TAG, "Processing file with mime type: " + mimeType);
+            if (mimeType == null) {
+                callback.onError("Could not determine file type");
+                return;
+            }
+
             switch (mimeType) {
                 case "application/epub+zip":
                     readEpub(context, fileUri, callback);
@@ -1467,18 +1439,15 @@ public class BookFileReader {
                     readTxt(context, fileUri, callback);
                     break;
                 case "application/pdf":
-                    callback.onError("Чтение PDF файлов пока не поддерживается");
+                    callback.onError("PDF reading not supported yet");
                     break;
                 default:
-                    Log.e(TAG, "Unsupported file type: " + mimeType);
-                    callback.onError("Неподдерживаемый формат файла: " + mimeType);
+                    callback.onError("Unsupported file type: " + mimeType);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error reading book content", e);
-            callback.onError("Ошибка при чтении файла: " + e.getMessage());
+            callback.onError("Error reading file: " + e.getMessage());
         }
     }
-
     /**
      * Генерирует оглавление для книжного файла
      * @param context Контекст для доступа к файлам
@@ -1960,9 +1929,30 @@ public class BookFileReader {
     private static String getFileExtension(String path) {
         if (path == null) return "";
         
-        int dot = path.lastIndexOf('.');
-        if (dot >= 0 && dot < path.length() - 1) {
-            return path.substring(dot + 1);
+        int lastDotPosition;
+        int lastSlashPosition;
+        
+        // Обработка URL-адресов
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            // Удаляем параметры запроса, если они есть
+            int queryPosition = path.indexOf('?');
+            if (queryPosition > 0) {
+                path = path.substring(0, queryPosition);
+            }
+            
+            // Удаляем якорь, если он есть
+            int anchorPosition = path.indexOf('#');
+            if (anchorPosition > 0) {
+                path = path.substring(0, anchorPosition);
+            }
+        }
+        
+        lastSlashPosition = path.lastIndexOf('/');
+        String fileName = (lastSlashPosition >= 0) ? path.substring(lastSlashPosition + 1) : path;
+        
+        lastDotPosition = fileName.lastIndexOf('.');
+        if (lastDotPosition >= 0 && lastDotPosition < fileName.length() - 1) {
+            return fileName.substring(lastDotPosition + 1).toLowerCase();
         }
         
         return "";

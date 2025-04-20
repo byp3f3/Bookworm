@@ -22,6 +22,8 @@ import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
+import org.json.JSONObject;
+
 public class SupabaseAuth {
 
     private static final String TAG = "SupabaseAuth";
@@ -894,6 +896,42 @@ public class SupabaseAuth {
                 mainHandler.post(() -> callback.onError("Network error: " + e.getMessage()));
             }
         }).start();
+    }
+
+    /**
+     * Get the current user ID from the JWT token
+     * @return User ID or null if not available
+     */
+    public String getCurrentUserId() {
+        String token = getAccessToken();
+        if (token == null) {
+            Log.e(TAG, "getCurrentUserId: No access token available");
+            return null;
+        }
+        
+        try {
+            Log.d(TAG, "getCurrentUserId: Parsing token to extract user ID");
+            String[] parts = token.split("\\.");
+            if (parts.length == 3) {
+                String payload = new String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE), "UTF-8");
+                JSONObject payloadJson = new JSONObject(payload);
+                
+                if (!payloadJson.has("sub")) {
+                    Log.e(TAG, "getCurrentUserId: Token does not contain 'sub' field");
+                    return null;
+                }
+                
+                String userId = payloadJson.getString("sub");
+                Log.d(TAG, "getCurrentUserId: Successfully extracted user ID: " + userId);
+                return userId;
+            } else {
+                Log.e(TAG, "getCurrentUserId: Invalid token format, expected 3 parts but got " + parts.length);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error extracting user ID from token: " + e.getMessage(), e);
+        }
+        
+        return null;
     }
 
 }

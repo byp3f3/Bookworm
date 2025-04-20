@@ -13,7 +13,6 @@ public class SignInActivity extends BaseActivity {
     private EditText emailEditText;
     private EditText passwordEditText;
     private Button loginButton;
-    private TextView forgotPasswordLinkTextView;
     private TextView registerLinkTextView;
     private SupabaseAuth supabaseAuth;
     private SharedPreferences preferences;
@@ -39,11 +38,9 @@ public class SignInActivity extends BaseActivity {
         emailEditText = findViewById(R.id.emailEditText);
         passwordEditText = findViewById(R.id.passwordEditText);
         loginButton = findViewById(R.id.loginButton);
-        forgotPasswordLinkTextView = findViewById(R.id.forgotPasswordLinkTextView);
         registerLinkTextView = findViewById(R.id.registerLinkTextView);
 
         loginButton.setOnClickListener(v -> handleLogin());
-        forgotPasswordLinkTextView.setOnClickListener(v -> startActivity(new Intent(this, PasswordRecoveryActivity.class)));
         registerLinkTextView.setOnClickListener(v -> startActivity(new Intent(this, SingUpActivity.class)));
     }
 

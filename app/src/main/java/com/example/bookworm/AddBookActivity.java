@@ -356,7 +356,8 @@ public class AddBookActivity extends AppCompatActivity {
             endDate,
             rating,
             review,
-            getFileFormatFromUrl(selectedFilePath)
+            getFileFormatFromUrl(selectedFilePath),
+        false
         );
 
         // Используем уже созданный экземпляр supabaseService

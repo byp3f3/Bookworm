@@ -51,16 +51,6 @@
             android:layout_marginBottom="16dp" />
 
         <TextView
-            android:id="@+id/forgotPasswordLinkTextView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Забыли пароль?"
-            android:layout_gravity="end"
-            android:layout_marginBottom="16dp"
-            android:clickable="true"
-            android:focusable="true" />
-
-        <TextView
             android:id="@+id/registerLinkTextView"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

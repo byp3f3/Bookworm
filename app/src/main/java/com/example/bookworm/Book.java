@@ -17,10 +17,11 @@ public class Book {
     private String endDate;
     private int rating;
     private String review;
+    private boolean exist;
 
     public Book(String id, String title, String author, String description, String coverPath, 
                 String filePath, String status, int currentPage, int totalPages, int readingDays, 
-                String startDate, String endDate, int rating, String review, String fileFormat) {
+                String startDate, String endDate, int rating, String review, String fileFormat, boolean exist) {
         this.id = id;
         this.title = title;
         this.author = author;
@@ -36,6 +37,7 @@ public class Book {
         this.rating = rating;
         this.review = review;
         this.fileFormat = fileFormat;
+        this.exist = exist;
     }
 
     public Book() {
@@ -56,6 +58,10 @@ public class Book {
     public String getEndDate() { return endDate; }
     public int getRating() { return rating; }
     public String getReview() { return review; }
+
+    public boolean isExist() {
+        return exist;
+    }
 
     public String getFileFormat() {
         return fileFormat;
@@ -80,6 +86,10 @@ public class Book {
     public void setEndDate(String endDate) { this.endDate = endDate; }
     public void setRating(int rating) { this.rating = rating; }
     public void setReview(String review) { this.review = review; }
+
+    public void setExist(boolean exist) {
+        this.exist = exist;
+    }
 
     public void setFileFormat(String fileFormat) {
         this.fileFormat = fileFormat;

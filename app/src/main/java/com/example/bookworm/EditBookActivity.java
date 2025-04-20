@@ -23,6 +23,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.io.OutputStream;
 import org.json.JSONObject;
+import com.example.bookworm.services.SupabaseService;
 
 public class EditBookActivity extends AppCompatActivity {
     private String bookId;
@@ -41,6 +42,7 @@ public class EditBookActivity extends AppCompatActivity {
     private SimpleDateFormat displayDateFormat;
     private SimpleDateFormat dbDateFormat;
     private String coverPath;
+    private SupabaseService supabaseService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,6 +61,9 @@ public class EditBookActivity extends AppCompatActivity {
         selectCoverButton = findViewById(R.id.selectCoverButton);
         saveButton = findViewById(R.id.saveButton);
         cancelButton = findViewById(R.id.cancelButton);
+
+        // Initialize Supabase service
+        supabaseService = new SupabaseService(this);
 
         // Initialize date formatters
         displayDateFormat = new SimpleDateFormat("dd.MM.yyyy", Locale.getDefault());
@@ -94,6 +99,7 @@ public class EditBookActivity extends AppCompatActivity {
             }
         } catch (ParseException e) {
             Log.e("EditBookActivity", "Error parsing dates", e);
+            // Don't fail on parse exception, just leave date fields empty
         }
 
         // Setup status spinner
@@ -186,115 +192,146 @@ public class EditBookActivity extends AppCompatActivity {
         // Convert dates to database format and validate
         String dbStartDate = null;
         String dbEndDate = null;
+        SimpleDateFormat currentDateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
+        String today = currentDateFormat.format(new Date());
+        
         try {
-            if (!startDate.isEmpty()) {
+            if (startDate != null && !startDate.isEmpty()) {
                 Date startDateObj = displayDateFormat.parse(startDate);
                 dbStartDate = dbDateFormat.format(startDateObj);
             }
-            if (!endDate.isEmpty()) {
+            
+            if (endDate != null && !endDate.isEmpty()) {
                 Date endDateObj = displayDateFormat.parse(endDate);
                 dbEndDate = dbDateFormat.format(endDateObj);
                 
-                // Validate end date is not before start date
-                if (dbStartDate != null && dbEndDate.compareTo(dbStartDate) < 0) {
+                // Validate end date is not before start date - only if both dates are present
+                if (dbStartDate != null && !dbStartDate.isEmpty() && 
+                    dbEndDate != null && !dbEndDate.isEmpty() && 
+                    dbEndDate.compareTo(dbStartDate) < 0) {
                     Toast.makeText(this, "Дата окончания не может быть раньше даты начала", Toast.LENGTH_SHORT).show();
                     return;
                 }
             }
         } catch (ParseException e) {
+            Log.e("EditBookActivity", "Error parsing dates: " + e.getMessage(), e);
             Toast.makeText(this, "Ошибка в формате даты", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        // Update book in database
-        DatabaseHelper dbHelper = new DatabaseHelper(this);
-        dbHelper.updateBook(bookId, title, author, "", status, currentPage, totalPages, dbStartDate, dbEndDate, coverPath);
-        dbHelper.close();
+        // Fix dates based on status
+        if ("Читаю".equals(status)) {
+            // For reading books, ensure we have a start date
+            if (dbStartDate == null || dbStartDate.isEmpty() || "null".equals(dbStartDate)) {
+                dbStartDate = today;
+            }
+            // Clear end date for books being read
+            dbEndDate = null;
+        } 
+        else if ("Прочитано".equals(status)) {
+            // For finished books, ensure we have both dates
+            if (dbStartDate == null || dbStartDate.isEmpty() || "null".equals(dbStartDate)) {
+                dbStartDate = today;
+            }
+            if (dbEndDate == null || dbEndDate.isEmpty() || "null".equals(dbEndDate)) {
+                dbEndDate = today;
+            }
+        }
+        // For planned books, dates are optional
 
-        // Sync with Supabase
-        syncBookChanges(bookId, title, author, status, currentPage, totalPages, dbStartDate, dbEndDate, coverPath);
+        // Log for debugging
+        Log.d("EditBookActivity", "Saving book with status: " + status);
+        Log.d("EditBookActivity", "Start date: " + dbStartDate);
+        Log.d("EditBookActivity", "End date: " + dbEndDate);
 
-        // Return to BookActivity with updated data
-        Intent resultIntent = new Intent();
-        resultIntent.putExtra("id", bookId);
-        resultIntent.putExtra("title", title);
-        resultIntent.putExtra("author", author);
-        resultIntent.putExtra("status", status);
-        resultIntent.putExtra("currentPage", currentPage);
-        resultIntent.putExtra("totalPages", totalPages);
-        resultIntent.putExtra("startDate", dbStartDate);
-        resultIntent.putExtra("endDate", dbEndDate);
-        resultIntent.putExtra("coverPath", coverPath);
-        setResult(RESULT_OK, resultIntent);
-        finish();
+        // Update book in Supabase
+        updateBookInSupabase(title, author, status, currentPage, totalPages, dbStartDate, dbEndDate, coverPath);
     }
 
-    private void syncBookChanges(String bookId, String title, String author, String status, 
-                                int currentPage, int totalPages, String startDate, String endDate, String coverPath) {
-        if (bookId == null || bookId.isEmpty()) {
-            Log.e("EditBookActivity", "Invalid book ID: null or empty");
-            Toast.makeText(this, "Ошибка: неверный идентификатор книги", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Use the original status value directly
-        Log.d("EditBookActivity", "Syncing status to Supabase: " + status);
-
-        new Thread(() -> {
-            try {
-                // Construct the URL with the correct endpoint
-                URL url = new URL("https://mfszyfmtujztqrjweixz.supabase.co/rest/v1/books?id=eq." + bookId);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                
-                // Set request method and headers
-                conn.setRequestMethod("PATCH");
-                conn.setRequestProperty("apikey", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mc3p5Zm10dWp6dHFyandlaXh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE1OTkzNDAsImV4cCI6MjA1NzE3NTM0MH0.3URDTNl5T0R_TyWn6L0NlEFuLYoiH2qcQdYVNovFtVw");
-                conn.setRequestProperty("Authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mc3p5Zm10dWp6dHFyandlaXh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE1OTkzNDAsImV4cCI6MjA1NzE3NTM0MH0.3URDTNl5T0R_TyWn6L0NlEFuLYoiH2qcQdYVNovFtVw");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Prefer", "return=minimal");
-                conn.setDoOutput(true);
-
-                // Create JSON data
-                JSONObject data = new JSONObject();
-                data.put("title", title);
-                data.put("author", author);
-                data.put("status", status); // Use the original status value directly
-                data.put("current_page", currentPage);
-                data.put("page_count", totalPages);
-                if (startDate != null) data.put("start_date", startDate);
-                if (endDate != null) data.put("finish_date", endDate);
-                if (coverPath != null) data.put("cover_image_url", coverPath);
-                data.put("updated_at", new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
-                    .format(new java.util.Date()));
-
-                // Write data to connection
-                try (OutputStream os = conn.getOutputStream()) {
-                    byte[] input = data.toString().getBytes("utf-8");
-                    os.write(input, 0, input.length);
-                }
-
-                // Get response
-                int responseCode = conn.getResponseCode();
-                if (responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_NO_CONTENT) {
-                    runOnUiThread(() -> Toast.makeText(EditBookActivity.this, 
-                        "Изменения синхронизированы", Toast.LENGTH_SHORT).show());
-                } else {
-                    // Read error response
-                    try (java.io.BufferedReader br = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(conn.getErrorStream(), "utf-8"))) {
-                        StringBuilder response = new StringBuilder();
-                        String responseLine;
-                        while ((responseLine = br.readLine()) != null) {
-                            response.append(responseLine.trim());
-                        }
-                        throw new Exception("HTTP error code: " + responseCode + ", Response: " + response.toString());
-                    }
-                }
-            } catch (Exception e) {
-                Log.e("EditBookActivity", "Failed to sync book changes with Supabase: " + e.getMessage());
-                runOnUiThread(() -> Toast.makeText(EditBookActivity.this, 
-                    "Ошибка синхронизации с сервером: " + e.getMessage(), Toast.LENGTH_LONG).show());
+    private void updateBookInSupabase(String title, String author, String status, 
+                                    int currentPage, int totalPages, String startDate, String endDate, String coverPath) {
+        // Show progress indicator
+        Toast.makeText(this, "Сохранение изменений...", Toast.LENGTH_SHORT).show();
+        
+        // Create a book object with updated information
+        Book updatedBook = new Book();
+        updatedBook.setId(bookId);
+        updatedBook.setTitle(title);
+        updatedBook.setAuthor(author);
+        updatedBook.setStatus(status);
+        updatedBook.setCurrentPage(currentPage);
+        updatedBook.setTotalPages(totalPages);
+        updatedBook.setStartDate(startDate);
+        updatedBook.setEndDate(endDate);
+        updatedBook.setCoverPath(coverPath);
+        updatedBook.setExist(true);
+        
+        // Preserve existing fields that we're not editing
+        updatedBook.setRating(getIntent().getIntExtra("rating", 0));
+        updatedBook.setReview(getIntent().getStringExtra("review"));
+        updatedBook.setDescription(getIntent().getStringExtra("description"));
+        
+        // We need to preserve file information to avoid re-uploading
+        String fileUrl = getIntent().getStringExtra("file_url");
+        if (fileUrl != null && !fileUrl.isEmpty()) {
+            // This is the URL of an already uploaded file - preserve it
+            Log.d("EditBookActivity", "Using existing file URL: " + fileUrl);
+            updatedBook.setFilePath(fileUrl);
+        } else {
+            String filePath = getIntent().getStringExtra("filePath");
+            if (filePath != null && !filePath.isEmpty()) {
+                Log.d("EditBookActivity", "Using file path: " + filePath);
+                updatedBook.setFilePath(filePath);
             }
-        }).start();
+        }
+        
+        updatedBook.setFileFormat(getIntent().getStringExtra("fileFormat"));
+        
+        Log.d("EditBookActivity", "Saving book to Supabase: " + bookId);
+        Log.d("EditBookActivity", "FilePath: " + updatedBook.getFilePath());
+        
+        supabaseService.saveBook(updatedBook, new SupabaseService.BookSaveCallback() {
+            @Override
+            public void onSuccess() {
+                Log.d("EditBookActivity", "Book saved successfully");
+                
+                // Return to BookActivity with updated data
+                Intent resultIntent = new Intent();
+                resultIntent.putExtra("id", bookId);
+                resultIntent.putExtra("title", title);
+                resultIntent.putExtra("author", author);
+                resultIntent.putExtra("status", status);
+                resultIntent.putExtra("currentPage", currentPage);
+                resultIntent.putExtra("totalPages", totalPages);
+                resultIntent.putExtra("startDate", startDate);
+                resultIntent.putExtra("endDate", endDate);
+                resultIntent.putExtra("coverPath", coverPath);
+                
+                // Include any preserved fields
+                resultIntent.putExtra("rating", updatedBook.getRating());
+                resultIntent.putExtra("review", updatedBook.getReview());
+                resultIntent.putExtra("description", updatedBook.getDescription());
+                resultIntent.putExtra("filePath", updatedBook.getFilePath());
+                resultIntent.putExtra("fileFormat", updatedBook.getFileFormat());
+                resultIntent.putExtra("file_url", updatedBook.getFilePath());
+                
+                setResult(RESULT_OK, resultIntent);
+                finish();
+            }
+            
+            @Override
+            public void onError(String error) {
+                Log.e("EditBookActivity", "Error saving book: " + error);
+                Toast.makeText(EditBookActivity.this, "Ошибка сохранения книги: " + error, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (supabaseService != null) {
+            supabaseService.shutdown();
+        }
     }
 } 

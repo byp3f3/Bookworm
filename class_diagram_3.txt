@@ -1,0 +1,117 @@
+@startuml Bookworm Class Diagram (3)
+
+skinparam classAttributeIconSize 0
+skinparam class {
+  BackgroundColor white
+  ArrowColor black
+  BorderColor black
+}
+
+class Book {
+  - String id
+  - String title
+  - String author
+  - String description
+  - String coverPath
+  - String filePath
+  - String fileFormat
+  - String status
+  - int currentPage
+  - int totalPages
+  - int readingDays
+  - String startDate
+  - String endDate
+  - int rating
+  - String review
+  - boolean exist
+  + getReadingProgress(): int
+}
+
+class Quote {
+  - String id
+  - String bookId
+  - String text
+  - int page
+  - String dateAdded
+}
+
+class Shelf {
+  - String id
+  - String name
+  - String description
+  - String userId
+  - List<String> bookIds
+}
+
+class TocItem {
+  - String title
+  - int level
+  - int position
+  - String anchorId
+}
+
+class ShelvesFragment {
+  - RecyclerView shelvesRecyclerView
+  - List<Shelf> shelvesList
+  + onCreateView(...): View
+  + onViewCreated(View view, Bundle savedInstanceState): void
+  + loadShelves(): void
+  + onCreateShelfClick(View view): void
+}
+
+class ProfileFragment {
+  - TextView usernameTextView
+  - TextView booksReadTextView
+  - Button settingsButton
+  + onCreateView(...): View
+  + onViewCreated(View view, Bundle savedInstanceState): void
+  + loadUserData(): void
+}
+
+class BookAdapter {
+  - List<Book> books
+  - OnBookClickListener listener
+  + onCreateViewHolder(...): ViewHolder
+  + onBindViewHolder(...): void
+  + getItemCount(): int
+}
+
+class ChartPagerAdapter {
+  - List<Chart> charts
+  - FragmentManager fragmentManager
+  + getItem(int position): Fragment
+  + getCount(): int
+  + getPageTitle(int position): CharSequence
+}
+
+class SupabaseAuth {
+  - String accessToken
+  - String refreshToken
+  - String userId
+  + signIn(String email, String password): Response
+  + signUp(String email, String password): Response
+  + signOut(): void
+  + refreshSession(): boolean
+  + isAuthenticated(): boolean
+  + getAccessToken(): String
+  + getUserId(): String
+}
+
+class SupabaseService {
+  - SupabaseAuth auth
+  - PostgrestClient client
+  + getBooks(): List<Book>
+  + getShelves(): List<Shelf>
+  + addBook(Book book): Response
+  + updateBook(Book book): Response
+  + deleteBook(String bookId): Response
+  + addShelf(Shelf shelf): Response
+  + addBookToShelf(String bookId, String shelfId): Response
+  + shutdown(): void
+}
+
+Book "1" -- "many" Quote: contains
+Shelf "1" -- "many" Book: contains
+SupabaseService -- SupabaseAuth: uses
+
+@enduml 

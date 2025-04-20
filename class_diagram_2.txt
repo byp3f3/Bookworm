@@ -1,0 +1,87 @@
+@startuml Bookworm Class Diagram (2)
+
+skinparam classAttributeIconSize 0
+skinparam class {
+  BackgroundColor white
+  ArrowColor black
+  BorderColor black
+}
+
+abstract class BaseActivity {
+  # SupabaseAuth supabaseAuth
+}
+
+abstract class BaseFragment {
+  # Context context
+  # SupabaseAuth supabaseAuth
+  + onAttach(Context context): void
+  + getSupabaseAuth(): SupabaseAuth
+}
+
+class AddBookActivity {
+  - EditText titleEditText
+  - EditText authorEditText
+  - Button selectFileButton
+  - Button selectCoverButton
+  + onCreate(Bundle savedInstanceState): void
+  + onSelectFileClick(View view): void
+  + onSelectCoverClick(View view): void
+  + onSaveBookClick(View view): void
+}
+
+class EditBookActivity {
+  - Book book
+  - EditText titleEditText
+  - EditText authorEditText
+  - RatingBar ratingBar
+  - EditText reviewEditText
+  + onCreate(Bundle savedInstanceState): void
+  + loadBookData(): void
+  + onSaveChangesClick(View view): void
+}
+
+class ShelfDetailActivity {
+  - Shelf shelf
+  - RecyclerView booksRecyclerView
+  - BookAdapter bookAdapter
+  + onCreate(Bundle savedInstanceState): void
+  + loadShelfBooks(): void
+  + onAddBookToShelfClick(View view): void
+}
+
+class SettingsActivity {
+  - Switch darkModeSwitch
+  - Spinner fontSizeSpinner
+  + onCreate(Bundle savedInstanceState): void
+  + onOptionSelected(View view): void
+}
+
+class HomeFragment {
+  - RecyclerView recentBooksRecyclerView
+  - TextView welcomeTextView
+  - ChartView readingStatsChart
+  + onCreateView(...): View
+  + onViewCreated(View view, Bundle savedInstanceState): void
+  + loadRecentBooks(): void
+  + loadReadingStats(): void
+}
+
+class LibraryFragment {
+  - RecyclerView booksRecyclerView
+  - BookAdapter bookAdapter
+  - List<Book> booksList
+  + onCreateView(...): View
+  + onViewCreated(View view, Bundle savedInstanceState): void
+  + loadLibrary(): void
+  + filterBooks(String filter): void
+}
+
+BaseActivity <|-- AddBookActivity
+BaseActivity <|-- EditBookActivity
+BaseActivity <|-- ShelfDetailActivity
+BaseActivity <|-- SettingsActivity
+
+BaseFragment <|-- HomeFragment
+BaseFragment <|-- LibraryFragment
+
+@enduml 

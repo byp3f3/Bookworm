@@ -1,0 +1,68 @@
++-------------------------------+
+|                               |
+|     ПОЛЬЗОВАТЕЛЬСКИЙ СЛОЙ     |
+|                               |
++-------------------------------+
+       |               |
+       |               |
+       v               v
++-------------+   +--------------+
+| Активности  |   |  Фрагменты   |
++-------------+   +--------------+
+| MainActivity|   | HomeFragment |
+| SignInActivity   | LibraryFragment
+| SingUpActivity   | ShelvesFragment
+| BookActivity |   | ProfileFragment
+| BookReaderActivity
+| AddBookActivity
+| EditBookActivity
+| ShelfDetailActivity
+| PersonalDataActivity
+| SettingsActivity
+| FilePickerActivity
++-------------+   +--------------+
+       |               |
+       |               |
+       v               v
++-------------------------------+
+|                               |
+|     СЛОЙ БИЗНЕС-ЛОГИКИ        |
+|                               |
++-------------------------------+
+              |
+              |
+              v
++-------------------------------+
+|                               |
+|     СЕРВИСНЫЙ СЛОЙ            |
+|                               |
++-------------------------------+
+| SupabaseAuth                  |
+| SupabaseService               |
+| FileUtils                     |
++-------------------------------+
+              |
+              |
+              v
++-------------------------------+
+|                               |
+|     СЛОЙ ДАННЫХ               |
+|                               |
++-------------------------------+
+| Book                          |
+| Quote                         |
+| Shelf                         |
+| TocItem                       |
++-------------------------------+
+              |
+              |
+              v
++-------------------------------+
+|                               |
+|     ВНЕШНИЕ СЕРВИСЫ           |
+|                               |
++-------------------------------+
+| Supabase Database             |
+| Supabase Storage              |
+| Supabase Authentication       |
++-------------------------------+ 
